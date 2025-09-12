@@ -56,11 +56,15 @@ export default function TableViewer({
   const rowsPerPage = 100;
 
 
-  const loadTableData = useCallback(async () => {
+  const loadTableData = useCallback(async (retryCount = 0) => {
     if (!connectionId) return;
 
-    setLoading(true);
-    setError(null);
+    const maxRetries = 3;
+
+    if (retryCount === 0) {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
       const offset = (currentPage - 1) * rowsPerPage;
@@ -73,22 +77,42 @@ export default function TableViewer({
       });
 
       if (!response.ok) {
-        throw new Error("Failed to fetch table data");
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || "Failed to fetch table data");
       }
 
       const { result } = await response.json();
       setData(result);
+
+      // Clear any previous errors on success
+      if (error) {
+        setError(null);
+      }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to load table data";
-      setError(errorMessage);
-      console.error("Table data loading error:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [connectionId, schema, tableName, currentPage]);
+      console.error(`Table data loading error (attempt ${retryCount + 1}):`, err);
 
-  const loadRowCount = useCallback(async () => {
+      // Retry with exponential backoff
+      if (retryCount < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+        setTimeout(() => {
+          loadTableData(retryCount + 1);
+        }, delay);
+      } else {
+        // After all retries failed, show error
+        setError(`${errorMessage} (after ${maxRetries + 1} attempts)`);
+      }
+    } finally {
+      if (retryCount === 0) {
+        setLoading(false);
+      }
+    }
+  }, [connectionId, schema, tableName, currentPage, error]);
+
+  const loadRowCount = useCallback(async (retryCount = 0) => {
     if (!connectionId) return;
+
+    const maxRetries = 3;
 
     try {
       const query = `SELECT COUNT(*) as count FROM "${schema}"."${tableName}"`;
@@ -100,14 +124,26 @@ export default function TableViewer({
       });
 
       if (!response.ok) {
-        throw new Error("Failed to fetch row count");
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || "Failed to fetch row count");
       }
 
       const { result } = await response.json();
       setTotalRows(parseInt(result.rows[0].count) || 0);
     } catch (err: unknown) {
-      console.error("Row count loading error:", err);
-      // Don't set error state for row count failures
+      console.error(`Row count loading error (attempt ${retryCount + 1}):`, err);
+
+      // Retry with exponential backoff
+      if (retryCount < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+        setTimeout(() => {
+          loadRowCount(retryCount + 1);
+        }, delay);
+      } else {
+        // After all retries failed, set a default count
+        console.warn(`Failed to load row count after ${maxRetries + 1} attempts, using fallback`);
+        setTotalRows(0);
+      }
     }
   }, [connectionId, schema, tableName]);
 

@@ -39,11 +39,15 @@ export default function DatabaseNavigator({
 
 
 
-  const loadSchemas = useCallback(async () => {
+  const loadSchemas = useCallback(async (retryCount = 0) => {
     if (!connection) return;
 
-    setLoading(true);
-    setError(null);
+    const maxRetries = 3;
+
+    if (retryCount === 0) {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
       // Don't create connection here - assume it's already connected by parent
@@ -53,7 +57,7 @@ export default function DatabaseNavigator({
       );
 
       if (!schemasResponse.ok) {
-        const errorData = await schemasResponse.json();
+        const errorData = await schemasResponse.json().catch(() => ({ error: 'Unknown error' }));
         throw new Error(errorData.error || "Failed to fetch schemas");
       }
 
@@ -67,14 +71,31 @@ export default function DatabaseNavigator({
       }));
 
       setSchemas(schemaNodes);
+
+      // Clear any previous errors on success
+      if (error) {
+        setError(null);
+      }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to load database schemas";
-      setError(errorMessage);
-      console.error("Schema loading error:", err);
+      console.error(`Schema loading error (attempt ${retryCount + 1}):`, err);
+
+      // Retry with exponential backoff
+      if (retryCount < maxRetries) {
+        const delay = Math.min(2000 * Math.pow(2, retryCount), 10000);
+        setTimeout(() => {
+          loadSchemas(retryCount + 1);
+        }, delay);
+      } else {
+        // After all retries failed, show error with retry option
+        setError(`${errorMessage} (after ${maxRetries + 1} attempts)`);
+      }
     } finally {
-      setLoading(false);
+      if (retryCount === 0) {
+        setLoading(false);
+      }
     }
-  }, [connection]);
+  }, [connection, error]);
 
   useEffect(() => {
     if (connection) {

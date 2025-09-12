@@ -7,43 +7,358 @@ import {
   QueryResult,
 } from "@/types/database";
 
-// Store active connections and their configurations
-const activeConnections = new Map<string, Pool>();
-const connectionConfigs = new Map<string, DatabaseConnection>();
-const schemaCache = new Map<string, { ts: number; data: DatabaseSchema[] }>();
-const recentlyCreated = new Map<string, number>(); // Track recently created connections
-const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const RECENT_CONNECTION_TTL_MS = 30 * 1000; // 30 seconds
+// Singleton Pool Manager
+class DatabasePoolManager {
+  private static instance: DatabasePoolManager;
+  private pools = new Map<string, Pool>();
+  private configs = new Map<string, DatabaseConnection>();
+  private health = new Map<string, { lastCheck: number; healthy: boolean; inUse: number }>();
+  private recentlyCreated = new Map<string, number>();
+  private schemaCache = new Map<string, { ts: number; data: DatabaseSchema[] }>();
+
+  // Configuration constants
+  private readonly SCHEMA_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+  private readonly RECENT_CONNECTION_TTL_MS = 2 * 60 * 1000; // 2 minutes
+  private readonly HEALTH_CHECK_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  private readonly MAX_IDLE_TIME_MS = 10 * 60 * 1000; // 10 minutes
+  private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+  private cleanupTimer: NodeJS.Timeout | null = null;
+
+  private constructor() {
+    this.startCleanupTimer();
+  }
+
+  static getInstance(): DatabasePoolManager {
+    if (!DatabasePoolManager.instance) {
+      DatabasePoolManager.instance = new DatabasePoolManager();
+    }
+    return DatabasePoolManager.instance;
+  }
+
+  private startCleanupTimer() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+    }
+
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupIdleConnections();
+    }, this.CLEANUP_INTERVAL_MS);
+  }
+
+  private async cleanupIdleConnections() {
+    const now = Date.now();
+    const connectionsToClose: string[] = [];
+
+    for (const [connectionId, healthInfo] of this.health.entries()) {
+      const isIdle = healthInfo.inUse === 0;
+      const isOld = now - healthInfo.lastCheck > this.MAX_IDLE_TIME_MS;
+      const isRecentlyCreated = this.recentlyCreated.has(connectionId) &&
+        (now - this.recentlyCreated.get(connectionId)!) < this.RECENT_CONNECTION_TTL_MS;
+
+      if (isIdle && isOld && !isRecentlyCreated) {
+        connectionsToClose.push(connectionId);
+      }
+    }
+
+    for (const connectionId of connectionsToClose) {
+      console.log(`🧹 Cleaning up idle connection: ${connectionId}`);
+      await this.closeConnection(connectionId, false);
+    }
+  }
+
+  async createPool(connection: DatabaseConnection): Promise<Pool> {
+    const connectionId = connection.id;
+
+    // Store config first
+    this.configs.set(connectionId, connection);
+
+    // Close existing pool if it exists
+    if (this.pools.has(connectionId)) {
+      await this.closeConnection(connectionId, false);
+    }
+
+    const pool = new Pool({
+      host: connection.host,
+      port: connection.port,
+      database: connection.database,
+      user: connection.username,
+      password: connection.password,
+      ssl: connection.ssl ? { rejectUnauthorized: false } : false,
+
+      // Optimized pool settings for stability
+      max: 3, // Smaller pool size for better resource management
+      min: 0, // Allow pool to scale down to 0 when idle
+      connectionTimeoutMillis: 20000, // Increased timeout
+      idleTimeoutMillis: 30000, // Keep connections alive for 30 seconds
+      allowExitOnIdle: false, // Don't exit on idle
+
+      // Connection validation
+      statement_timeout: 30000, // 30 second query timeout
+      query_timeout: 30000,
+    });
+
+    // Set up pool event handlers
+    pool.on('error', (err) => {
+      console.error(`Pool error for ${connectionId}:`, err);
+      this.health.set(connectionId, {
+        lastCheck: Date.now(),
+        healthy: false,
+        inUse: this.health.get(connectionId)?.inUse || 0
+      });
+    });
+
+    pool.on('connect', () => {
+      console.log(`✅ Pool connected for ${connectionId}`);
+    });
+
+    pool.on('acquire', () => {
+      const current = this.health.get(connectionId);
+      this.health.set(connectionId, {
+        lastCheck: Date.now(),
+        healthy: current?.healthy ?? true,
+        inUse: (current?.inUse || 0) + 1
+      });
+    });
+
+    pool.on('release', () => {
+      const current = this.health.get(connectionId);
+      this.health.set(connectionId, {
+        lastCheck: Date.now(),
+        healthy: current?.healthy ?? true,
+        inUse: Math.max(0, (current?.inUse || 1) - 1)
+      });
+    });
+
+    // Test the connection
+    const client = await Promise.race([
+      pool.connect(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Connection timeout')), 15000)
+      )
+    ]);
+
+    await Promise.race([
+      client.query("SELECT 1"),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Query timeout')), 10000)
+      )
+    ]);
+
+    client.release();
+
+    // Store the pool and mark as healthy
+    this.pools.set(connectionId, pool);
+    this.recentlyCreated.set(connectionId, Date.now());
+    this.health.set(connectionId, {
+      lastCheck: Date.now(),
+      healthy: true,
+      inUse: 0
+    });
+
+    console.log(`✅ Pool created successfully for ${connectionId}`);
+    return pool;
+  }
+
+  async getPool(connectionId: string): Promise<Pool> {
+    let pool = this.pools.get(connectionId);
+
+    if (pool) {
+      const health = this.health.get(connectionId);
+      const isRecentlyCreated = this.recentlyCreated.has(connectionId) &&
+        (Date.now() - this.recentlyCreated.get(connectionId)!) < this.RECENT_CONNECTION_TTL_MS;
+
+      // Skip health check for recently created connections
+      if (isRecentlyCreated) {
+        return pool;
+      }
+
+      // Check if we need a health check
+      const needsHealthCheck = !health ||
+        (Date.now() - health.lastCheck > this.HEALTH_CHECK_INTERVAL_MS) ||
+        !health.healthy;
+
+      if (needsHealthCheck) {
+        const isHealthy = await this.checkPoolHealth(connectionId, pool);
+        if (!isHealthy) {
+          pool = undefined;
+        }
+      }
+    }
+
+    if (!pool) {
+      const config = this.configs.get(connectionId);
+      if (!config) {
+        throw new Error(`No configuration found for connection: ${connectionId}`);
+      }
+      pool = await this.createPool(config);
+    }
+
+    return pool;
+  }
+
+  private async checkPoolHealth(connectionId: string, pool: Pool): Promise<boolean> {
+    try {
+      const client = await Promise.race([
+        pool.connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Health check timeout')), 5000)
+        )
+      ]);
+
+      await Promise.race([
+        client.query("SELECT 1"),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Health query timeout')), 3000)
+        )
+      ]);
+
+      client.release();
+
+      // Update health status
+      const current = this.health.get(connectionId);
+      this.health.set(connectionId, {
+        lastCheck: Date.now(),
+        healthy: true,
+        inUse: current?.inUse || 0
+      });
+
+      return true;
+    } catch (error) {
+      console.log(`❌ Health check failed for ${connectionId}:`, error instanceof Error ? error.message : "Unknown error");
+
+      // Mark as unhealthy and close the pool
+      this.health.set(connectionId, {
+        lastCheck: Date.now(),
+        healthy: false,
+        inUse: 0
+      });
+
+      await this.closeConnection(connectionId, false);
+      return false;
+    }
+  }
+
+  async closeConnection(connectionId: string, removeConfig: boolean = false): Promise<void> {
+    const pool = this.pools.get(connectionId);
+    if (pool) {
+      try {
+        await pool.end();
+        console.log(`🔌 Pool closed for ${connectionId}`);
+      } catch (error) {
+        console.warn(`Warning: Error closing pool for ${connectionId}:`, error);
+      }
+
+      this.pools.delete(connectionId);
+      this.health.delete(connectionId);
+      this.recentlyCreated.delete(connectionId);
+    }
+
+    if (removeConfig) {
+      this.configs.delete(connectionId);
+    }
+  }
+
+  async closeAllConnections(): Promise<void> {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+
+    const closePromises = Array.from(this.pools.keys()).map(id =>
+      this.closeConnection(id, true)
+    );
+
+    await Promise.all(closePromises);
+    this.schemaCache.clear();
+  }
+
+  // Schema cache methods
+  getCachedSchema(connectionId: string): { ts: number; data: DatabaseSchema[] } | null {
+    const cached = this.schemaCache.get(connectionId);
+    if (!cached) return null;
+
+    const isExpired = Date.now() - cached.ts > this.SCHEMA_CACHE_TTL_MS;
+    if (isExpired) {
+      this.schemaCache.delete(connectionId);
+      return null;
+    }
+
+    return cached;
+  }
+
+  setCachedSchema(connectionId: string, data: DatabaseSchema[]): void {
+    this.schemaCache.set(connectionId, {
+      ts: Date.now(),
+      data
+    });
+  }
+
+  getConnectionConfig(connectionId: string): DatabaseConnection | undefined {
+    return this.configs.get(connectionId);
+  }
+
+  setConnectionConfig(connectionId: string, config: DatabaseConnection): void {
+    this.configs.set(connectionId, config);
+  }
+}
+
+// Global instance
+const poolManager = DatabasePoolManager.getInstance();
 
 export class DatabaseService {
   static async testConnection(
     connection: DatabaseConnection
   ): Promise<boolean> {
+    let testPool: Pool | null = null;
     let client: PoolClient | null = null;
 
     try {
-      const pool = new Pool({
+      // Create a temporary pool just for testing
+      testPool = new Pool({
         host: connection.host,
         port: connection.port,
         database: connection.database,
         user: connection.username,
         password: connection.password,
         ssl: connection.ssl ? { rejectUnauthorized: false } : false,
-        connectionTimeoutMillis: 5000,
-        idleTimeoutMillis: 30000,
-        max: 1, // Limit connections for testing
+        connectionTimeoutMillis: 10000,
+        idleTimeoutMillis: 5000,
+        max: 1, // Single connection for testing
       });
 
-      client = await pool.connect();
-      await client.query("SELECT 1");
+      client = await Promise.race([
+        testPool.connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Connection timeout')), 8000)
+        )
+      ]);
+
+      await Promise.race([
+        client.query("SELECT 1"),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Query timeout')), 5000)
+        )
+      ]);
 
       client.release();
-      await pool.end();
+      await testPool.end();
 
       return true;
     } catch (error) {
       if (client) {
-        client.release();
+        try {
+          client.release();
+        } catch (releaseError) {
+          console.warn("Error releasing test client:", releaseError);
+        }
+      }
+      if (testPool) {
+        try {
+          await testPool.end();
+        } catch (endError) {
+          console.warn("Error ending test pool:", endError);
+        }
       }
       console.error("Database connection test failed:", error);
       return false;
@@ -54,26 +369,14 @@ export class DatabaseService {
     connection: DatabaseConnection
   ): Promise<boolean> {
     try {
-      // First test the connection with a temporary pool
-      const testPool = new Pool({
-        host: connection.host,
-        port: connection.port,
-        database: connection.database,
-        user: connection.username,
-        password: connection.password,
-        ssl: connection.ssl ? { rejectUnauthorized: false } : false,
-        connectionTimeoutMillis: 5000,
-        idleTimeoutMillis: 30000,
-        max: 1,
-      });
+      // First test the connection
+      const testResult = await this.testConnection(connection);
+      if (!testResult) {
+        return false;
+      }
 
-      const client = await testPool.connect();
-      await client.query("SELECT 1");
-      client.release();
-      await testPool.end();
-
-      // If test succeeds, create the persistent connection
-      await this.createConnection(connection);
+      // If test succeeds, create the persistent connection using pool manager
+      await poolManager.createPool(connection);
       return true;
     } catch (error) {
       console.error("Database connection test and create failed:", error);
@@ -82,113 +385,39 @@ export class DatabaseService {
   }
 
   static async createConnection(connection: DatabaseConnection): Promise<Pool> {
-    try {
-
-      // Store config FIRST before any operations
-      connectionConfigs.set(connection.id, connection);
-
-      // Close existing connection if it exists (but keep config)
-      if (activeConnections.has(connection.id)) {
-        const existingPool = activeConnections.get(connection.id);
-        if (existingPool) {
-          await existingPool.end();
-          activeConnections.delete(connection.id);
-          // Don't delete config here - we need it!
-        }
-      }
-
-      const pool = new Pool({
-        host: connection.host,
-        port: connection.port,
-        database: connection.database,
-        user: connection.username,
-        password: connection.password,
-        ssl: connection.ssl ? { rejectUnauthorized: false } : false,
-        connectionTimeoutMillis: 10000,
-        idleTimeoutMillis: 30000,
-        max: 10, // Maximum number of clients in the pool
-      });
-
-      // Test the connection
-      const client = await pool.connect();
-      await client.query("SELECT 1");
-      client.release();
-
-      activeConnections.set(connection.id, pool);
-      recentlyCreated.set(connection.id, Date.now()); // Mark as recently created
-
-      return pool;
-    } catch (error) {
-      console.error("Failed to create database connection:", error);
-      // Remove config if connection creation failed
-      connectionConfigs.delete(connection.id);
-      throw error;
-    }
+    return await poolManager.createPool(connection);
   }
 
   static async closeConnection(connectionId: string, removeConfig: boolean = false): Promise<void> {
-    const pool = activeConnections.get(connectionId);
-    if (pool) {
-      await pool.end();
-      activeConnections.delete(connectionId);
-      recentlyCreated.delete(connectionId); // Clean up tracking
-      if (removeConfig) {
-        connectionConfigs.delete(connectionId);
-      }
-    }
+    await poolManager.closeConnection(connectionId, removeConfig);
   }
 
   static async getOrCreateConnection(connectionId: string): Promise<Pool> {
+    const maxRetries = 3;
+    let retryCount = 0;
 
-    // Check if we have an active connection
-    let pool = activeConnections.get(connectionId);
-
-    // Test if the pool is still healthy (but skip for recently created connections)
-    if (pool) {
-      const createdTime = recentlyCreated.get(connectionId);
-      const isRecentlyCreated = createdTime && (Date.now() - createdTime) < RECENT_CONNECTION_TTL_MS;
-
-      if (isRecentlyCreated) {
-        return pool; // Skip health check for recently created connections
-      }
-
+    while (retryCount < maxRetries) {
       try {
-        // Quick health check - if this fails, the pool is ended/unhealthy
-        const client = await pool.connect();
-        await client.query("SELECT 1");
-        client.release();
-        return pool;
+        return await poolManager.getPool(connectionId);
       } catch (error: unknown) {
-        console.log(`❌ Health check failed for ${connectionId}:`, error instanceof Error ? error.message : "Unknown error");
-        activeConnections.delete(connectionId);
-        recentlyCreated.delete(connectionId); // Clean up tracking
-        pool = undefined;
+        retryCount++;
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        console.error(`Connection attempt ${retryCount} failed for ${connectionId}:`, errorMessage);
+
+        if (retryCount >= maxRetries) {
+          throw new Error(
+            `Failed to establish database connection after ${maxRetries} attempts: ${errorMessage}`
+          );
+        }
+
+        // Wait before retrying (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
       }
     }
 
-    if (!pool) {
-      // Try to recreate connection from stored config
-      const config = connectionConfigs.get(connectionId);
-      if (config) {
-        pool = await this.createConnection(config);
-      } else {
-        console.log(`❌ No stored config found for: ${connectionId}`);
-      }
-    }
-
-    if (!pool) {
-      throw new Error(
-        "No active connection found and no stored configuration available"
-      );
-    }
-
-    return pool;
+    throw new Error("Unexpected error in connection retry loop");
   }
 
-  static getConnection(connectionId: string): Pool | null {
-    const connection = activeConnections.get(connectionId) || null;
-    return connection;
-  }
 
   static async executeQuery(
     connectionId: string,
@@ -412,10 +641,9 @@ export class DatabaseService {
   static async getFullSchema(
     connectionId: string
   ): Promise<DatabaseSchema[]> {
-    // Serve from cache when fresh
-    const cached = schemaCache.get(connectionId);
-    const now = Date.now();
-    if (cached && now - cached.ts < SCHEMA_CACHE_TTL_MS) {
+    // Check cache first using pool manager
+    const cached = poolManager.getCachedSchema(connectionId);
+    if (cached) {
       return cached.data;
     }
 
@@ -429,7 +657,8 @@ export class DatabaseService {
       schemas.push({ schema_name: schemaName, tables });
     }
 
-    schemaCache.set(connectionId, { ts: now, data: schemas });
+    // Cache using pool manager
+    poolManager.setCachedSchema(connectionId, schemas);
     return schemas;
   }
 
@@ -456,9 +685,6 @@ export class DatabaseService {
 
   // Cleanup all connections when the app is closing
   static async closeAllConnections(): Promise<void> {
-    const promises = Array.from(activeConnections.keys()).map((id) =>
-      this.closeConnection(id, true) // Remove configs when closing all
-    );
-    await Promise.all(promises);
+    await poolManager.closeAllConnections();
   }
 }

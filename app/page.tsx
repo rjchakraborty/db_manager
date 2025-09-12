@@ -202,7 +202,8 @@ export default function Home() {
         connectionId: string,
         onSuccess?: (schemas: { schema_name: string; tables: DatabaseTable[] }[]) => void,
         onError?: (error: string) => void,
-        forceRefresh: boolean = false
+        forceRefresh: boolean = false,
+        retryCount: number = 0
     ) => {
         if (!connectionId) {
             const error = "Cannot fetch schema: no connection ID provided";
@@ -211,10 +212,13 @@ export default function Home() {
             return;
         }
 
+        const maxRetries = 3;
+
         // Check cache first (unless force refresh)
-        if (!forceRefresh) {
+        if (!forceRefresh && retryCount === 0) {
             const cached = getCachedSchema(connectionId);
             if (cached) {
+                console.log(`📋 Using cached schema for ${connectionId}`);
 
                 // Update state with cached data
                 setFullSchema(cached.schemas);
@@ -230,9 +234,12 @@ export default function Home() {
             }
         }
 
-        setIsLoadingSchema(true);
+        if (retryCount === 0) {
+            setIsLoadingSchema(true);
+        }
 
         try {
+            console.log(`🔄 Fetching schema for ${connectionId} (attempt ${retryCount + 1})`);
 
             const res = await fetch(
                 `/api/database/full-schema?connectionId=${encodeURIComponent(connectionId)}`
@@ -241,9 +248,7 @@ export default function Home() {
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
                 const error = `Failed to fetch schema (${res.status}): ${errorData.error}`;
-                console.error(error);
-                onError?.(error);
-                return;
+                throw new Error(error);
             }
 
             const { schemas } = await res.json();
@@ -265,15 +270,29 @@ export default function Home() {
                 setCurrentSchema(schemas[0].schema_name);
             }
 
+            console.log(`✅ Schema loaded successfully for ${connectionId}`);
             // Call success callback
             onSuccess?.(schemas);
 
         } catch (e: unknown) {
-            const error = `Error fetching full schema: ${e instanceof Error ? e.message : 'Unknown error'}`;
-            console.error(error);
-            onError?.(error);
+            const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+            console.error(`Schema loading error (attempt ${retryCount + 1}):`, errorMessage);
+
+            // Retry with exponential backoff
+            if (retryCount < maxRetries) {
+                const delay = Math.min(2000 * Math.pow(2, retryCount), 10000);
+                setTimeout(() => {
+                    fetchFullSchema(connectionId, onSuccess, onError, forceRefresh, retryCount + 1);
+                }, delay);
+            } else {
+                // After all retries failed, call error callback
+                const finalError = `Error fetching full schema: ${errorMessage} (after ${maxRetries + 1} attempts)`;
+                onError?.(finalError);
+            }
         } finally {
-            setIsLoadingSchema(false);
+            if (retryCount === 0) {
+                setIsLoadingSchema(false);
+            }
         }
     };
 
