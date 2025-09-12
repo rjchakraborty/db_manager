@@ -1,103 +1,579 @@
-import Image from "next/image";
+"use client";
+
+import React, { useState, useEffect } from "react";
+import DatabaseNavigator from "@/components/database/database-navigator";
+import TableViewer from "@/components/database/table-viewer";
+import EnhancedAIAssistant from "@/components/ai-assistant/enhanced-ai-assistant";
+import SettingsModal from "@/components/settings/settings-modal";
+import {
+    DatabaseConnection,
+    DatabaseTable,
+    QueryResult,
+} from "@/types/database";
+import { Settings, Menu, X, RefreshCw } from "lucide-react";
+import { ConnectionManager } from "@/lib/connection-manager";
+import { ResizablePanel } from "@/components/ui/resizable-panel";
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    const [selectedConnection, setSelectedConnection] =
+        useState<DatabaseConnection | null>(null);
+    const [connections, setConnections] = useState<DatabaseConnection[]>([]);
+    const [selectedTable, setSelectedTable] = useState<{
+        schema: string;
+        table: string;
+    } | null>(null);
+    const [currentSchema, setCurrentSchema] = useState("public");
+    const [availableTables, setAvailableTables] = useState<DatabaseTable[]>([]);
+    const [fullSchema, setFullSchema] = useState<
+        { schema_name: string; tables: DatabaseTable[] }[]
+    >([]);
+    const [isNavigatorOpen, setIsNavigatorOpen] = useState(true);
+    const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isAutoConnecting, setIsAutoConnecting] = useState(false);
+    const [isLoadingSchema, setIsLoadingSchema] = useState(false);
+    const [schemaCache, setSchemaCache] = useState<Map<string, {
+        schemas: any[];
+        timestamp: number;
+        tables: DatabaseTable[];
+    }>>(new Map());
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+    // Load connections and auto-connect on page load
+    useEffect(() => {
+        loadConnections();
+        loadSchemaCache();
+        autoConnectDefault();
+    }, []);
+
+    const loadConnections = () => {
+        const allConnections = ConnectionManager.getAllConnections();
+        setConnections(allConnections);
+    };
+
+    const loadSchemaCache = () => {
+        try {
+            const cached = localStorage.getItem('db-schema-cache');
+            if (cached) {
+                const parsedCache = JSON.parse(cached);
+                const cacheMap = new Map();
+                Object.entries(parsedCache).forEach(([key, value]: [string, any]) => {
+                    cacheMap.set(key, value);
+                });
+                setSchemaCache(cacheMap);
+            }
+        } catch (error) {
+            console.error('Error loading schema cache:', error);
+        }
+    };
+
+    const saveSchemaCache = (connectionId: string, schemas: any[], tables: DatabaseTable[]) => {
+        try {
+            const newCache = new Map(schemaCache);
+            newCache.set(connectionId, {
+                schemas,
+                tables,
+                timestamp: Date.now()
+            });
+
+            setSchemaCache(newCache);
+
+            // Save to localStorage
+            const cacheObject = Object.fromEntries(newCache);
+            localStorage.setItem('db-schema-cache', JSON.stringify(cacheObject));
+
+        } catch (error) {
+            console.error('Error saving schema cache:', error);
+        }
+    };
+
+    const getCachedSchema = (connectionId: string): { schemas: any[], tables: DatabaseTable[] } | null => {
+        const cached = schemaCache.get(connectionId);
+        if (!cached) return null;
+
+        // Check if cache is still fresh (24 hours)
+        const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+        const isExpired = Date.now() - cached.timestamp > CACHE_TTL;
+
+        if (isExpired) {
+            return null;
+        }
+
+        return { schemas: cached.schemas, tables: cached.tables };
+    };
+
+    const connectToDatabase = async (
+        connection: DatabaseConnection,
+        onSuccess?: () => void,
+        onError?: (error: string) => void
+    ): Promise<boolean> => {
+        try {
+
+            const connectResponse = await fetch("/api/database/connect-and-test", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(connection),
+            });
+
+            if (connectResponse.ok) {
+                setSelectedConnection(connection);
+                onSuccess?.();
+                return true;
+            } else {
+                const errorData = await connectResponse.json().catch(() => ({ error: 'Connection failed' }));
+                const errorMsg = `Failed to connect: ${errorData.error}`;
+                console.error(errorMsg);
+                onError?.(errorMsg);
+                return false;
+            }
+        } catch (error: any) {
+            const errorMsg = `Connection error: ${error.message}`;
+            console.error(errorMsg);
+            onError?.(errorMsg);
+            return false;
+        }
+    };
+
+    const autoConnectDefault = async () => {
+        try {
+            setIsAutoConnecting(true);
+
+            const defaultConnection = ConnectionManager.getDefaultConnection();
+            if (!defaultConnection) {
+                return;
+            }
+
+
+            await connectToDatabase(
+                defaultConnection,
+                () => {
+                    // On successful connection, fetch schema
+                    fetchFullSchema(defaultConnection.id, (schemas) => {
+                    });
+                },
+                (error) => {
+                    console.error("Auto-connect failed:", error);
+                }
+            );
+        } catch (error) {
+            console.error("Error during auto-connect:", error);
+        } finally {
+            setIsAutoConnecting(false);
+        }
+    };
+
+    const handleConnectionSelect = async (connection: DatabaseConnection): Promise<void> => {
+        setSelectedTable(null);
+        setAvailableTables([]);
+        setQueryResult(null);
+
+        return new Promise((resolve, reject) => {
+            connectToDatabase(
+                connection,
+                () => {
+                    // On successful connection, fetch schema
+                    fetchFullSchema(
+                        connection.id,
+                        (schemas) => {
+                            resolve();
+                        },
+                        (error) => {
+                            console.error("Schema loading failed:", error);
+                            reject(new Error(error));
+                        }
+                    );
+                },
+                (error) => {
+                    console.error("Manual connection failed:", error);
+                    reject(new Error(error));
+                }
+            );
+        });
+    };
+
+    const handleTableSelect = (schema: string, table: string) => {
+        setSelectedTable({ schema, table });
+        setCurrentSchema(schema);
+        // Clear query results to show default table view
+        setQueryResult(null);
+    };
+
+    const fetchFullSchema = async (
+        connectionId: string,
+        onSuccess?: (schemas: any[]) => void,
+        onError?: (error: string) => void,
+        forceRefresh: boolean = false
+    ) => {
+        if (!connectionId) {
+            const error = "Cannot fetch schema: no connection ID provided";
+            console.error(error);
+            onError?.(error);
+            return;
+        }
+
+        // Check cache first (unless force refresh)
+        if (!forceRefresh) {
+            const cached = getCachedSchema(connectionId);
+            if (cached) {
+
+                // Update state with cached data
+                setFullSchema(cached.schemas);
+                setAvailableTables(cached.tables);
+
+                // Update current schema if needed
+                if (!cached.schemas.find((s: any) => s.schema_name === currentSchema) && cached.schemas.length > 0) {
+                    setCurrentSchema(cached.schemas[0].schema_name);
+                }
+
+                onSuccess?.(cached.schemas);
+                return;
+            }
+        }
+
+        setIsLoadingSchema(true);
+
+        try {
+
+            const res = await fetch(
+                `/api/database/full-schema?connectionId=${encodeURIComponent(connectionId)}`
+            );
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
+                const error = `Failed to fetch schema (${res.status}): ${errorData.error}`;
+                console.error(error);
+                onError?.(error);
+                return;
+            }
+
+            const { schemas } = await res.json();
+
+            // Flatten all schemas' tables so AI gets complete context
+            const allTables: DatabaseTable[] = schemas.flatMap((s: any) =>
+                (s.tables || []).map((t: any) => ({ ...t, table_schema: s.schema_name }))
+            );
+
+            // Update state
+            setFullSchema(schemas);
+            setAvailableTables(allTables);
+
+            // Save to cache
+            saveSchemaCache(connectionId, schemas, allTables);
+
+            // If no current schema among received, pick first for UI defaults
+            if (!schemas.find((s: any) => s.schema_name === currentSchema) && schemas.length > 0) {
+                setCurrentSchema(schemas[0].schema_name);
+            }
+
+            // Call success callback
+            onSuccess?.(schemas);
+
+        } catch (e: any) {
+            const error = `Error fetching full schema: ${e.message}`;
+            console.error(error);
+            onError?.(error);
+        } finally {
+            setIsLoadingSchema(false);
+        }
+    };
+
+    const handleQueryExecute = async (query: string): Promise<QueryResult> => {
+        if (!selectedConnection) {
+            throw new Error("No database connection selected");
+        }
+
+        const response = await fetch("/api/database/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                connectionId: selectedConnection.id,
+                query,
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw {
+                message: errorData.error || "Query execution failed",
+                code: "QUERY_ERROR",
+            };
+        }
+
+        const { result } = await response.json();
+        setQueryResult(result);
+        return result;
+    };
+
+    const handleAIQuery = async (naturalLanguage: string): Promise<string> => {
+        if (!selectedConnection) {
+            throw new Error("No database connection selected");
+        }
+
+        if (!naturalLanguage.trim()) {
+            throw new Error("Please enter a natural language query");
+        }
+
+        try {
+            const response = await fetch("/api/ai/query", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    naturalLanguage: naturalLanguage.trim(),
+                    context: {
+                        tables: availableTables,
+                        currentSchema,
+                    },
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || "Failed to generate SQL");
+            }
+
+            const { response: aiResponse } = await response.json();
+
+            if (aiResponse?.sql) {
+                return aiResponse.sql;
+            } else {
+                throw new Error("AI did not generate valid SQL");
+            }
+        } catch (error: any) {
+            console.error("AI query generation failed:", error);
+            throw new Error(error.message || "Failed to generate SQL query");
+        }
+    };
+
+    const handleSQLGenerated = (sql: string) => {
+        // SQL generated, will be handled in the enhanced AI assistant
+    };
+
+    return (
+        <div className="h-screen flex flex-col bg-white">
+            {/* Header */}
+            <header className="h-14 header-border bg-white flex items-center px-6">
+                <div className="flex items-center">
+                    <div className="h-7 w-7 bg-black rounded-md flex items-center justify-center mr-3">
+                        <span className="text-white font-semibold text-xs">DB</span>
+                    </div>
+                    <h1 className="text-lg font-semibold text-black">DB Manager</h1>
+                    <span className="ml-3 px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded-md font-medium">
+                        AI-Powered
+                    </span>
+                </div>
+
+                {selectedConnection && (
+                    <div className="ml-8 text-sm text-gray-600 flex items-center">
+                        <span className="text-gray-400">Connected to</span>{" "}
+                        <span className="font-medium text-black ml-1">{selectedConnection.name}</span>
+                        {isLoadingSchema ? (
+                            <div className="ml-2 flex items-center">
+                                <RefreshCw className="h-3 w-3 animate-spin text-gray-400" />
+                                <span className="ml-1 text-xs text-gray-400">Loading schema...</span>
+                            </div>
+                        ) : (
+                            <button
+                                onClick={() => selectedConnection && fetchFullSchema(selectedConnection.id, undefined, undefined, true)}
+                                className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Refresh schema">
+                                <RefreshCw className="h-3 w-3" />
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                <div className="ml-auto flex items-center space-x-3">
+                    <button
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="btn-ghost flex items-center">
+                        <Settings className="h-4 w-4 mr-2" />
+                        Settings
+                    </button>
+
+                    {selectedConnection && (
+                        <button
+                            onClick={() => setIsNavigatorOpen(!isNavigatorOpen)}
+                            className="lg:hidden btn-ghost">
+                            {isNavigatorOpen ? (
+                                <X className="h-4 w-4" />
+                            ) : (
+                                <Menu className="h-4 w-4" />
+                            )}
+                        </button>
+                    )}
+                </div>
+            </header>
+
+            {/* Main Content */}
+            <div className="flex-1 flex overflow-hidden">
+                {selectedConnection ? (
+                    <div className="flex h-full w-full">
+                        {/* Database Navigator - Resizable */}
+                        <ResizablePanel
+                            defaultWidth={288}
+                            minWidth={200}
+                            maxWidth={500}
+                            storageKey="db-navigator-width"
+                            className={`${isNavigatorOpen ? "translate-x-0" : "-translate-x-full"
+                                } lg:translate-x-0 transition-transform duration-300 ease-in-out
+                                h-full bg-white z-10 fixed lg:relative lg:flex flex-col
+                                ${isNavigatorOpen ? "shadow-xl lg:shadow-none" : ""}`}
+                        >
+                            <DatabaseNavigator
+                                connection={selectedConnection}
+                                onTableSelect={handleTableSelect}
+                                selectedTable={selectedTable || undefined}
+                            />
+                        </ResizablePanel>
+
+                        {/* Overlay for mobile */}
+                        {isNavigatorOpen && (
+                            <div
+                                className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-5"
+                                onClick={() => setIsNavigatorOpen(false)}
+                            />
+                        )}
+
+                        {/* Table Viewer - Takes remaining space */}
+                        <div className="flex-1 flex flex-col min-w-0">
+                            {selectedTable || queryResult ? (
+                                <TableViewer
+                                    connectionId={selectedConnection.id}
+                                    schema={selectedTable?.schema || ""}
+                                    tableName={selectedTable?.table || ""}
+                                    table={selectedTable ? availableTables.find(t => t.table_name === selectedTable.table) : undefined}
+                                    queryResult={queryResult}
+                                />
+                            ) : (
+                                <div className="flex-1 flex items-center justify-center text-gray-500">
+                                    <div className="text-center">
+                                        <div className="h-12 w-12 mx-auto mb-4 text-gray-300">
+                                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                                <path
+                                                    fillRule="evenodd"
+                                                    d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm0 4a1 1 0 011-1h12a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1V8z"
+                                                    clipRule="evenodd"
+                                                />
+                                            </svg>
+                                        </div>
+                                        <p className="text-sm">
+                                            Select a table from the navigator or use AI Assistant to
+                                            query data
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* AI SQL Assistant - Resizable */}
+                        <ResizablePanel
+                            defaultWidth={320}
+                            minWidth={280}
+                            maxWidth={600}
+                            storageKey="ai-assistant-width"
+                            className="bg-gray-50"
+                            position="left"
+                        >
+                            <EnhancedAIAssistant
+                                connectionId={selectedConnection.id}
+                                tables={availableTables}
+                                currentSchema={currentSchema}
+                                onQueryExecute={handleQueryExecute}
+                                fullSchema={fullSchema}
+                                selectedTable={selectedTable}
+                            />
+                        </ResizablePanel>
+                    </div>
+                ) : (
+                    <div className="flex-1 flex items-center justify-center bg-gray-50">
+                        <div className="text-center max-w-md mx-auto px-6">
+                            <div className="h-20 w-20 mx-auto mb-6 bg-gray-100 rounded-2xl flex items-center justify-center">
+                                <svg className="h-10 w-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                                </svg>
+                            </div>
+
+                            {isAutoConnecting ? (
+                                <>
+                                    <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                                        Connecting to Database...
+                                    </h2>
+                                    <div className="flex justify-center mb-6">
+                                        <RefreshCw className="h-5 w-5 animate-spin text-gray-400" />
+                                    </div>
+                                </>
+                            ) : !ConnectionManager.hasAnyConnection() ? (
+                                <>
+                                    <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                                        Welcome to DB Manager
+                                    </h2>
+                                    <p className="text-gray-600 mb-8 leading-relaxed">
+                                        Configure your first PostgreSQL connection to get started with AI-powered database management
+                                    </p>
+                                    <button
+                                        onClick={() => setIsSettingsOpen(true)}
+                                        className="btn-primary">
+                                        Add Database Connection
+                                    </button>
+                                </>
+                            ) : ConnectionManager.hasMultipleConnections() &&
+                                !ConnectionManager.getDefaultConnection() ? (
+                                <>
+                                    <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                                        Multiple Connections Available
+                                    </h2>
+                                    <p className="text-gray-600 mb-8 leading-relaxed">
+                                        Please select a connection from Settings or set a default connection
+                                    </p>
+                                    <button
+                                        onClick={() => setIsSettingsOpen(true)}
+                                        className="btn-primary">
+                                        Choose Connection
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                                        Welcome to DB Manager
+                                    </h2>
+                                    <p className="text-gray-600 mb-8 leading-relaxed">
+                                        Connect to your PostgreSQL database to get started
+                                    </p>
+                                </>
+                            )}
+
+                            {!isAutoConnecting && (
+                                <div className="mt-12 space-y-3">
+                                    <div className="flex items-center text-sm text-gray-500">
+                                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full mr-3"></div>
+                                        <span>Browse database schemas and tables</span>
+                                    </div>
+                                    <div className="flex items-center text-sm text-gray-500">
+                                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full mr-3"></div>
+                                        <span>Execute SQL queries with syntax highlighting</span>
+                                    </div>
+                                    <div className="flex items-center text-sm text-gray-500">
+                                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full mr-3"></div>
+                                        <span>Use AI to convert natural language to SQL</span>
+                                    </div>
+                                    <div className="flex items-center text-sm text-gray-500">
+                                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full mr-3"></div>
+                                        <span>View and export table data</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Settings Modal */}
+            <SettingsModal
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                onConnectionSelect={handleConnectionSelect}
+                currentConnectionId={selectedConnection?.id}
+                onConnectionTest={(connection) => connectToDatabase(connection)}
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
-  );
+    );
 }

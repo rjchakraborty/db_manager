@@ -1,36 +1,86 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DB Manager - AI-Powered PostgreSQL Database Manager
 
-## Getting Started
+A modern, web-based database management tool for PostgreSQL with AI-powered natural language to SQL conversion using Google Gemini.
 
-First, run the development server:
+## Features
+
+- 🔐 **Secure Connection Management**: Encrypted local storage for database credentials
+- 🌳 **Database Navigator**: Browse schemas, tables, and columns with a tree view
+- 📊 **Table Viewer**: View and export table data with pagination
+- 🔍 **SQL Query Editor**: Monaco Editor with syntax highlighting and autocomplete
+- 🤖 **AI Query Assistant**: Convert natural language to SQL using Google Gemini
+- 📱 **Responsive Design**: Clean, minimal interface built with Tailwind CSS
+- 🚀 **Client-Side Only**: No server-side data storage, everything runs locally
+
+## Tech Stack
+
+- **Frontend**: Next.js 14 with App Router, React, TypeScript
+- **Styling**: Tailwind CSS
+- **Database**: PostgreSQL connection via node-postgres
+- **AI**: Google Gemini API for natural language processing
+- **Security**: Client-side encryption with crypto-js
+- **Editor**: Monaco Editor for SQL syntax highlighting
+
+## Prerequisites
+
+- Node.js 18+
+- A PostgreSQL database to connect to
+- Google Gemini API key (optional, for AI features)
+
+## Installation
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Start the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+3. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Database Connection
 
-## Learn More
+1. Click "Add" in the Connections panel
+2. Fill in your PostgreSQL connection details
+3. Click "Test Connection" to verify
+4. Click "Create" to save the connection
 
-To learn more about Next.js, take a look at the following resources:
+**Note**: All connection details are encrypted and stored locally in your browser.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### AI Features (Optional)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Get a Google Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Click the "AI Assistant" button
+3. Enter your API key when prompted
 
-## Deploy on Vercel
+## Usage
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Database Navigation
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Click on a connection to connect and browse the database
+- Expand schemas to see tables
+- Click on a table to view its structure and data
+
+### Query Editor
+
+- Write and execute SQL queries
+- Use AI Assistant for natural language queries
+- Export results as CSV
+
+## Security
+
+- **No Server-Side Storage**: All data remains on your local machine
+- **Encrypted Credentials**: Database connections are encrypted using AES
+- **Local API Keys**: Gemini API keys are encrypted and stored locally
+- **Client-Side Only**: No sensitive data is sent to any servers
+
+## Deployment
+
+The application is optimized for deployment on Vercel and works entirely client-side.
