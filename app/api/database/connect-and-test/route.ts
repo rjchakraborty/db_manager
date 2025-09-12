@@ -16,10 +16,11 @@ export async function POST(request: NextRequest) {
                 { status: 400 }
             );
         }
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Connect and test error:", error);
+        const errorMessage = error instanceof Error ? error.message : "Connection failed";
         return NextResponse.json(
-            { success: false, error: error.message || "Connection failed" },
+            { success: false, error: errorMessage },
             { status: 500 }
         );
     }

@@ -75,14 +75,14 @@ export function copyToClipboard(text: string): Promise<boolean> {
         document.execCommand("copy");
         document.body.removeChild(textArea);
         return true;
-      } catch (err) {
+      } catch (_err) {
         document.body.removeChild(textArea);
         return false;
       }
     });
 }
 
-export function debounce<T extends (...args: any[]) => any>(
+export function debounce<T extends (...args: unknown[]) => unknown>(
   func: T,
   delay: number
 ): (...args: Parameters<T>) => void {

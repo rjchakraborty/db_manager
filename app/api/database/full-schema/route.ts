@@ -15,10 +15,11 @@ export async function GET(request: NextRequest) {
 
         const schemas = await DatabaseService.getFullSchema(connectionId);
         return NextResponse.json({ schemas });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Get full schema error:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to fetch full schema";
         return NextResponse.json(
-            { error: error.message || "Failed to fetch full schema" },
+            { error: errorMessage },
             { status: 500 }
         );
     }

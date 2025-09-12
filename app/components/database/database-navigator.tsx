@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { DatabaseConnection, DatabaseTable } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,16 +37,9 @@ export default function DatabaseNavigator({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (connection) {
-      loadSchemas();
-    } else {
-      setSchemas([]);
-      setError(null);
-    }
-  }, [connection]);
 
-  const loadSchemas = async () => {
+
+  const loadSchemas = useCallback(async () => {
     if (!connection) return;
 
     setLoading(true);
@@ -74,13 +67,23 @@ export default function DatabaseNavigator({
       }));
 
       setSchemas(schemaNodes);
-    } catch (err: any) {
-      setError(err.message || "Failed to load database schemas");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to load database schemas";
+      setError(errorMessage);
       console.error("Schema loading error:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [connection]);
+
+  useEffect(() => {
+    if (connection) {
+      loadSchemas();
+    } else {
+      setSchemas([]);
+      setError(null);
+    }
+  }, [connection, loadSchemas]);
 
   const toggleSchema = async (schemaName: string) => {
     if (!connection) return;
@@ -130,7 +133,7 @@ export default function DatabaseNavigator({
             : schema
         )
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(`Error loading tables for schema ${schemaName}:`, err);
       setSchemas((prev) =>
         prev.map((schema) =>

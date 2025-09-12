@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import DatabaseNavigator from "@/components/database/database-navigator";
 import TableViewer from "@/components/database/table-viewer";
 import EnhancedAIAssistant from "@/components/ai-assistant/enhanced-ai-assistant";
@@ -17,7 +17,7 @@ import { ResizablePanel } from "@/components/ui/resizable-panel";
 export default function Home() {
     const [selectedConnection, setSelectedConnection] =
         useState<DatabaseConnection | null>(null);
-    const [connections, setConnections] = useState<DatabaseConnection[]>([]);
+    const [_connections, setConnections] = useState<DatabaseConnection[]>([]);
     const [selectedTable, setSelectedTable] = useState<{
         schema: string;
         table: string;
@@ -33,7 +33,7 @@ export default function Home() {
     const [isAutoConnecting, setIsAutoConnecting] = useState(false);
     const [isLoadingSchema, setIsLoadingSchema] = useState(false);
     const [schemaCache, setSchemaCache] = useState<Map<string, {
-        schemas: any[];
+        schemas: { schema_name: string; tables: DatabaseTable[] }[];
         timestamp: number;
         tables: DatabaseTable[];
     }>>(new Map());
@@ -43,6 +43,7 @@ export default function Home() {
         loadConnections();
         loadSchemaCache();
         autoConnectDefault();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const loadConnections = () => {
@@ -56,7 +57,7 @@ export default function Home() {
             if (cached) {
                 const parsedCache = JSON.parse(cached);
                 const cacheMap = new Map();
-                Object.entries(parsedCache).forEach(([key, value]: [string, any]) => {
+                Object.entries(parsedCache).forEach(([key, value]: [string, unknown]) => {
                     cacheMap.set(key, value);
                 });
                 setSchemaCache(cacheMap);
@@ -66,7 +67,7 @@ export default function Home() {
         }
     };
 
-    const saveSchemaCache = (connectionId: string, schemas: any[], tables: DatabaseTable[]) => {
+    const saveSchemaCache = (connectionId: string, schemas: { schema_name: string; tables: DatabaseTable[] }[], tables: DatabaseTable[]) => {
         try {
             const newCache = new Map(schemaCache);
             newCache.set(connectionId, {
@@ -86,7 +87,7 @@ export default function Home() {
         }
     };
 
-    const getCachedSchema = (connectionId: string): { schemas: any[], tables: DatabaseTable[] } | null => {
+    const getCachedSchema = (connectionId: string): { schemas: { schema_name: string; tables: DatabaseTable[] }[], tables: DatabaseTable[] } | null => {
         const cached = schemaCache.get(connectionId);
         if (!cached) return null;
 
@@ -125,15 +126,15 @@ export default function Home() {
                 onError?.(errorMsg);
                 return false;
             }
-        } catch (error: any) {
-            const errorMsg = `Connection error: ${error.message}`;
+        } catch (error: unknown) {
+            const errorMsg = `Connection error: ${error instanceof Error ? error.message : 'Unknown error'}`;
             console.error(errorMsg);
             onError?.(errorMsg);
             return false;
         }
     };
 
-    const autoConnectDefault = async () => {
+    const autoConnectDefault = useCallback(async () => {
         try {
             setIsAutoConnecting(true);
 
@@ -147,7 +148,7 @@ export default function Home() {
                 defaultConnection,
                 () => {
                     // On successful connection, fetch schema
-                    fetchFullSchema(defaultConnection.id, (schemas) => {
+                    fetchFullSchema(defaultConnection.id, (_schemas) => {
                     });
                 },
                 (error) => {
@@ -159,7 +160,7 @@ export default function Home() {
         } finally {
             setIsAutoConnecting(false);
         }
-    };
+    }, []);
 
     const handleConnectionSelect = async (connection: DatabaseConnection): Promise<void> => {
         setSelectedTable(null);
@@ -173,7 +174,7 @@ export default function Home() {
                     // On successful connection, fetch schema
                     fetchFullSchema(
                         connection.id,
-                        (schemas) => {
+                        (_schemas) => {
                             resolve();
                         },
                         (error) => {
@@ -199,7 +200,7 @@ export default function Home() {
 
     const fetchFullSchema = async (
         connectionId: string,
-        onSuccess?: (schemas: any[]) => void,
+        onSuccess?: (schemas: { schema_name: string; tables: DatabaseTable[] }[]) => void,
         onError?: (error: string) => void,
         forceRefresh: boolean = false
     ) => {
@@ -220,7 +221,7 @@ export default function Home() {
                 setAvailableTables(cached.tables);
 
                 // Update current schema if needed
-                if (!cached.schemas.find((s: any) => s.schema_name === currentSchema) && cached.schemas.length > 0) {
+                if (!cached.schemas.find((s) => s.schema_name === currentSchema) && cached.schemas.length > 0) {
                     setCurrentSchema(cached.schemas[0].schema_name);
                 }
 
@@ -248,8 +249,8 @@ export default function Home() {
             const { schemas } = await res.json();
 
             // Flatten all schemas' tables so AI gets complete context
-            const allTables: DatabaseTable[] = schemas.flatMap((s: any) =>
-                (s.tables || []).map((t: any) => ({ ...t, table_schema: s.schema_name }))
+            const allTables: DatabaseTable[] = schemas.flatMap((s: { schema_name: string; tables: DatabaseTable[] }) =>
+                (s.tables || []).map((t) => ({ ...t, table_schema: s.schema_name }))
             );
 
             // Update state
@@ -260,15 +261,15 @@ export default function Home() {
             saveSchemaCache(connectionId, schemas, allTables);
 
             // If no current schema among received, pick first for UI defaults
-            if (!schemas.find((s: any) => s.schema_name === currentSchema) && schemas.length > 0) {
+            if (!schemas.find((s: { schema_name: string }) => s.schema_name === currentSchema) && schemas.length > 0) {
                 setCurrentSchema(schemas[0].schema_name);
             }
 
             // Call success callback
             onSuccess?.(schemas);
 
-        } catch (e: any) {
-            const error = `Error fetching full schema: ${e.message}`;
+        } catch (e: unknown) {
+            const error = `Error fetching full schema: ${e instanceof Error ? e.message : 'Unknown error'}`;
             console.error(error);
             onError?.(error);
         } finally {
@@ -303,7 +304,7 @@ export default function Home() {
         return result;
     };
 
-    const handleAIQuery = async (naturalLanguage: string): Promise<string> => {
+    const _handleAIQuery = async (naturalLanguage: string): Promise<string> => {
         if (!selectedConnection) {
             throw new Error("No database connection selected");
         }
@@ -337,13 +338,13 @@ export default function Home() {
             } else {
                 throw new Error("AI did not generate valid SQL");
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error("AI query generation failed:", error);
-            throw new Error(error.message || "Failed to generate SQL query");
+            throw new Error(error instanceof Error ? error.message : "Failed to generate SQL query");
         }
     };
 
-    const handleSQLGenerated = (sql: string) => {
+    const _handleSQLGenerated = (_sql: string) => {
         // SQL generated, will be handled in the enhanced AI assistant
     };
 

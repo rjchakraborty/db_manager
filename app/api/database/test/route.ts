@@ -30,13 +30,14 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Database connection test error:", error);
 
+    const errorMessage = error instanceof Error ? error.message : "Failed to test database connection";
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Failed to test database connection",
+        error: errorMessage,
       },
       { status: 500 }
     );

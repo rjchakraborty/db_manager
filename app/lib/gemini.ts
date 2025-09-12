@@ -18,7 +18,7 @@ export const isGeminiInitialized = (): boolean => {
   return genAI !== null;
 };
 
-const generateDatabaseContext = (context: any): string => {
+const generateDatabaseContext = (context: { tables: DatabaseTable[] | Record<string, unknown>[] }): string => {
   if (!context || !context.tables || context.tables.length === 0) {
     return "No table information available.";
   }
@@ -27,11 +27,11 @@ const generateDatabaseContext = (context: any): string => {
   const tables = context.tables;
 
   return tables
-    .map((table: any) => {
+    .map((table: DatabaseTable | Record<string, unknown>) => {
       // Handle enhanced table format from EnhancedAIAssistant
-      if (table.name && table.columns) {
-        const columns = table.columns
-          .map((col: any) => {
+      if ('name' in table && 'columns' in table) {
+        const columns = (table as { columns: Record<string, unknown>[] }).columns
+          .map((col: Record<string, unknown>) => {
             let colInfo = `${col.name} (${col.type}`;
             if (col.primaryKey) colInfo += ", PRIMARY KEY";
             if (col.foreignKey) colInfo += ", FOREIGN KEY";
@@ -53,8 +53,8 @@ const generateDatabaseContext = (context: any): string => {
       }
 
       // Handle old format (DatabaseTable)
-      const columns = table.columns
-        .map((col: any) => {
+      const columns = (table as DatabaseTable).columns
+        .map((col) => {
           let colInfo = `${col.column_name} (${col.data_type}`;
           if (col.is_primary_key) colInfo += ", PRIMARY KEY";
           if (col.is_foreign_key)
@@ -78,7 +78,7 @@ export const convertNaturalLanguageToSQL = async (
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     const databaseContext = request.context
       ? generateDatabaseContext(request.context)
@@ -176,11 +176,12 @@ Important: Only return the JSON object, no additional text.
         ],
       };
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Gemini API error:", error);
 
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     throw new Error(
-      `AI query conversion failed: ${error.message || "Unknown error"}`
+      `AI query conversion failed: ${errorMessage}`
     );
   }
 };
@@ -194,9 +195,9 @@ export const explainSQL = async (
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    const databaseContext = tables ? generateDatabaseContext(tables) : "";
+    const databaseContext = tables ? generateDatabaseContext({ tables }) : "";
 
     const prompt = `
 You are a PostgreSQL expert. Explain the following SQL query in simple terms.
@@ -219,9 +220,10 @@ Keep the explanation user-friendly for non-technical users.
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("SQL explanation error:", error);
-    return `Failed to explain SQL query: ${error.message || "Unknown error"}`;
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    return `Failed to explain SQL query: ${errorMessage}`;
   }
 };
 
@@ -234,9 +236,9 @@ export const suggestQueryImprovements = async (
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    const databaseContext = tables ? generateDatabaseContext(tables) : "";
+    const databaseContext = tables ? generateDatabaseContext({ tables }) : "";
 
     const prompt = `
 You are a PostgreSQL performance expert. Analyze the following SQL query and suggest improvements.
@@ -277,10 +279,11 @@ Only return the JSON array, no additional text.
       "Consider adding appropriate indexes for better performance",
       "Review WHERE clauses for optimization",
     ];
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Query improvement suggestions error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return [
-      `Failed to generate suggestions: ${error.message || "Unknown error"}`,
+      `Failed to generate suggestions: ${errorMessage}`,
     ];
   }
 };

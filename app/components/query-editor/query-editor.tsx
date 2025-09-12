@@ -53,23 +53,18 @@ export default function QueryEditor({
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteDescription, setFavoriteDescription] = useState("");
 
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<{ getValue: () => string; setValue: (value: string) => void; focus: () => void } | null>(null);
   const sqlIntelligence = useRef<SQLIntelligenceProvider>(new SQLIntelligenceProvider(tables, currentSchema));
   const aiRateLimiter = useRef<AIRateLimiter>(new AIRateLimiter(5, 1)); // 5 calls per minute
 
-  // Load favorites when component mounts or connection changes
-  useEffect(() => {
-    if (connectionId) {
-      loadFavorites();
-    }
-  }, [connectionId]);
 
-  const loadFavorites = () => {
+
+  const loadFavorites = useCallback(() => {
     if (connectionId) {
       const connectionFavorites = FavoritesManager.getFavorites(connectionId);
       setFavorites(connectionFavorites);
     }
-  };
+  }, [connectionId]);
 
   const saveFavorite = () => {
     if (!connectionId || !query.trim() || !favoriteName.trim()) return;
@@ -105,6 +100,13 @@ export default function QueryEditor({
     setResult(null);
     setError(null);
   };
+
+  // Load favorites when component mounts or connection changes
+  useEffect(() => {
+    if (connectionId) {
+      loadFavorites();
+    }
+  }, [connectionId, loadFavorites]);
 
   // Update query when generated SQL changes
   useEffect(() => {
@@ -278,8 +280,8 @@ export default function QueryEditor({
     try {
       const result = await onQueryExecute(query);
       setResult(result);
-    } catch (err: any) {
-      setError(err);
+    } catch (err: unknown) {
+      setError(err as QueryError);
     } finally {
       setIsExecuting(false);
     }
@@ -307,10 +309,10 @@ export default function QueryEditor({
       const generatedSQL = await onAIQuery(aiInput);
       setQuery(generatedSQL);
       setShowAIInput(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("AI query generation failed:", err);
       setError({
-        message: err.message || "Failed to generate SQL query",
+        message: err instanceof Error ? err.message : "Failed to generate SQL query",
         code: "AI_GENERATION_ERROR"
       });
     } finally {
@@ -472,8 +474,8 @@ export default function QueryEditor({
           </div>
           <div className="flex justify-between items-center mt-2">
             <p className="text-sm text-gray-500">
-              Example: "Show me all users who registered last month" or "Find the
-              top 10 products by sales"
+              Example: &quot;Show me all users who registered last month&quot; or &quot;Find the
+              top 10 products by sales&quot;
             </p>
             <p className="text-xs text-gray-400">
               AI calls remaining: {aiRateLimiter.current.getRemainingCalls()}/5 per minute

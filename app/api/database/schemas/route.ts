@@ -16,11 +16,12 @@ export async function GET(request: NextRequest) {
     const schemas = await DatabaseService.getSchemas(connectionId);
 
     return NextResponse.json({ schemas });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Get schemas error:", error);
 
+    const errorMessage = error instanceof Error ? error.message : "Failed to fetch schemas";
     return NextResponse.json(
-      { error: error.message || "Failed to fetch schemas" },
+      { error: errorMessage },
       { status: 500 }
     );
   }

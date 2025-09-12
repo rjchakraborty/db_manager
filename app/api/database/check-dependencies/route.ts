@@ -43,9 +43,9 @@ export async function POST(request: NextRequest) {
         const dependencies = [];
 
         // Check each foreign key relationship
-        for (const fk of fkResult.rows) {
-            const pkColumns = Object.keys(primaryKey);
-            const pkValues = Object.values(primaryKey);
+        for (const fk of fkResult.rows as Array<{ table_name: string; column_name: string; foreign_column_name: string; constraint_name: string }>) {
+            // const pkColumns = Object.keys(primaryKey);
+            // const pkValues = Object.values(primaryKey);
 
             // Build a query to check if this record is referenced
             const checkQuery = `
@@ -55,13 +55,14 @@ export async function POST(request: NextRequest) {
       `;
 
             try {
+                const pkRecord = primaryKey as Record<string, unknown>;
                 const countResult = await DatabaseService.executeQuery(
                     connectionId,
                     checkQuery,
-                    [primaryKey[fk.foreign_column_name]]
+                    [pkRecord[fk.foreign_column_name]]
                 );
 
-                const count = parseInt(countResult.rows[0].count) || 0;
+                const count = parseInt((countResult.rows[0] as { count: string }).count) || 0;
 
                 if (count > 0) {
                     dependencies.push({
@@ -84,10 +85,11 @@ export async function POST(request: NextRequest) {
                 : `Record is referenced by ${dependencies.length} other table(s)`
         });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Check dependencies error:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to check dependencies";
         return NextResponse.json(
-            { error: error.message || "Failed to check dependencies" },
+            { error: errorMessage },
             { status: 500 }
         );
     }

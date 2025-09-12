@@ -10,11 +10,11 @@ export async function POST(request: NextRequest) {
     await DatabaseService.createConnection(connection);
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Database connection error:", error);
-
+    const errorMessage = error instanceof Error ? error.message : "Failed to connect to database";
     return NextResponse.json(
-      { error: error.message || "Failed to connect to database" },
+      { error: errorMessage },
       { status: 500 }
     );
   }
@@ -35,11 +35,11 @@ export async function DELETE(request: NextRequest) {
     await DatabaseService.closeConnection(connectionId);
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Database disconnection error:", error);
-
+    const errorMessage = error instanceof Error ? error.message : "Failed to disconnect from database";
     return NextResponse.json(
-      { error: error.message || "Failed to disconnect from database" },
+      { error: errorMessage },
       { status: 500 }
     );
   }

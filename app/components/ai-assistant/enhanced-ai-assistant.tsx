@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { DatabaseTable, QueryResult } from "@/types/database";
 import { Editor } from "@monaco-editor/react";
@@ -43,39 +43,23 @@ export default function EnhancedAIAssistant({
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteDescription, setFavoriteDescription] = useState("");
 
+  const loadFavorites = useCallback(() => {
+    if (connectionId) {
+      const connectionFavorites = FavoritesManager.getFavorites(connectionId);
+      setFavorites(connectionFavorites);
+    }
+  }, [connectionId]);
+
+
+
   // Load favorites when component mounts or connection changes
   useEffect(() => {
     if (connectionId) {
       loadFavorites();
     }
-  }, [connectionId]);
+  }, [connectionId, loadFavorites]);
 
-  // Generate dynamic suggestions when schema or selected table changes
-  useEffect(() => {
-    if (connectionId && fullSchema && fullSchema.length > 0) {
-      // Reset AI suggestions flag when table changes to show fresh smart suggestions
-      setUseAISuggestions(false);
-      generateDynamicSuggestions();
-    }
-  }, [connectionId, fullSchema, selectedTable]);
 
-  const loadFavorites = () => {
-    if (connectionId) {
-      const connectionFavorites = FavoritesManager.getFavorites(connectionId);
-      setFavorites(connectionFavorites);
-    }
-  };
-
-  const generateDynamicSuggestions = async () => {
-    if (!connectionId || !fullSchema || fullSchema.length === 0) return;
-
-    // Always use fallback suggestions to avoid overloading the API
-    // This provides immediate, relevant suggestions without API calls
-    setDynamicSuggestions(generateFallbackSuggestions());
-
-    // Optional: Only try AI suggestions if user explicitly requests them
-    // This prevents automatic API calls that can overload the model
-  };
 
   const generateAISuggestions = async () => {
     if (!connectionId || !fullSchema || fullSchema.length === 0) return;
@@ -132,7 +116,7 @@ export default function EnhancedAIAssistant({
     }
   };
 
-  const generateFallbackSuggestions = (): string[] => {
+  const generateFallbackSuggestions = useCallback((): string[] => {
     if (!fullSchema || fullSchema.length === 0) return [];
 
     const allTables = fullSchema.flatMap(schema => schema.tables);
@@ -217,7 +201,27 @@ export default function EnhancedAIAssistant({
     }
 
     return suggestions.slice(0, 10); // Return up to 10 suggestions
-  };
+  }, [fullSchema, selectedTable, currentSchema]);
+
+  const generateDynamicSuggestions = useCallback(async () => {
+    if (!connectionId || !fullSchema || fullSchema.length === 0) return;
+
+    // Always use fallback suggestions to avoid overloading the API
+    // This provides immediate, relevant suggestions without API calls
+    setDynamicSuggestions(generateFallbackSuggestions());
+
+    // Optional: Only try AI suggestions if user explicitly requests them
+    // This prevents automatic API calls that can overload the model
+  }, [connectionId, fullSchema, generateFallbackSuggestions]);
+
+  // Generate dynamic suggestions when schema or selected table changes
+  useEffect(() => {
+    if (connectionId && fullSchema && fullSchema.length > 0) {
+      // Reset AI suggestions flag when table changes to show fresh smart suggestions
+      setUseAISuggestions(false);
+      generateDynamicSuggestions();
+    }
+  }, [connectionId, fullSchema, selectedTable, generateDynamicSuggestions]);
 
   const saveFavorite = () => {
     if (!connectionId || !sqlQuery.trim() || !favoriteName.trim()) return;
@@ -325,8 +329,9 @@ export default function EnhancedAIAssistant({
       } else {
         throw new Error("AI did not generate valid SQL");
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to generate SQL query");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to generate SQL query";
+      setError(errorMessage);
     } finally {
       setIsGenerating(false);
     }
@@ -341,8 +346,9 @@ export default function EnhancedAIAssistant({
     try {
       await onQueryExecute(sqlQuery);
       // Results will be displayed in the main TableViewer
-    } catch (err: any) {
-      setError(err.message || "Failed to execute query");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to execute query";
+      setError(errorMessage);
     } finally {
       setIsExecuting(false);
     }
@@ -615,8 +621,21 @@ export default function EnhancedAIAssistant({
               }}
               onMount={(editor, monaco) => {
                 monaco.languages.registerCompletionItemProvider("sql", {
-                  provideCompletionItems: () => {
-                    return { suggestions: monacoCompletionProvider } as any;
+                  provideCompletionItems: (model, position) => {
+                    const word = model.getWordUntilPosition(position);
+                    const range = {
+                      startLineNumber: position.lineNumber,
+                      endLineNumber: position.lineNumber,
+                      startColumn: word.startColumn,
+                      endColumn: word.endColumn
+                    };
+
+                    return {
+                      suggestions: monacoCompletionProvider.map(item => ({
+                        ...item,
+                        range
+                      }))
+                    };
                   },
                 });
               }}

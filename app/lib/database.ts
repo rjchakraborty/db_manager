@@ -158,8 +158,8 @@ export class DatabaseService {
         await client.query("SELECT 1");
         client.release();
         return pool;
-      } catch (error: any) {
-        console.log(`❌ Health check failed for ${connectionId}:`, error.message);
+      } catch (error: unknown) {
+        console.log(`❌ Health check failed for ${connectionId}:`, error instanceof Error ? error.message : "Unknown error");
         activeConnections.delete(connectionId);
         recentlyCreated.delete(connectionId); // Clean up tracking
         pool = undefined;
@@ -193,7 +193,7 @@ export class DatabaseService {
   static async executeQuery(
     connectionId: string,
     query: string,
-    params?: any[]
+    params?: unknown[]
   ): Promise<QueryResult> {
     try {
       const pool = await this.getOrCreateConnection(connectionId);
@@ -214,16 +214,18 @@ export class DatabaseService {
         command: result.command || "",
         duration,
       };
-    } catch (error: any) {
-      console.error(`Query execution failed for connection ${connectionId}:`, error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Query execution failed";
+      console.error(`Query execution failed for connection ${connectionId}:`, errorMessage);
+      const pgError = error as { code?: string; detail?: string; hint?: string; position?: string; line?: number; column?: number };
       throw {
-        message: error.message || "Query execution failed",
-        code: error.code || "UNKNOWN",
-        detail: error.detail,
-        hint: error.hint,
-        position: error.position,
-        line: error.line,
-        column: error.column,
+        message: errorMessage,
+        code: pgError.code || "UNKNOWN",
+        detail: pgError.detail,
+        hint: pgError.hint,
+        position: pgError.position,
+        line: pgError.line,
+        column: pgError.column,
       };
     }
   }
@@ -237,7 +239,7 @@ export class DatabaseService {
     `;
 
     const result = await this.executeQuery(connectionId, query);
-    return result.rows.map((row: any) => row.schema_name);
+    return result.rows.map((row) => (row as { schema_name: string }).schema_name);
   }
 
   static async getTables(
@@ -301,33 +303,35 @@ export class DatabaseService {
     // Group columns by table name
     const columnsByTable = new Map<string, DatabaseColumn[]>();
     for (const row of columnsResult.rows) {
-      const tableName = row.table_name;
+      const typedRow = row as { table_name: string; column_name: string; data_type: string; is_nullable: boolean | string; column_default: string | null; character_maximum_length: number | null; ordinal_position: number; is_primary_key: boolean; is_foreign_key: boolean; foreign_key_table: string | null; foreign_key_column: string | null };
+      const tableName = typedRow.table_name;
       if (!columnsByTable.has(tableName)) {
         columnsByTable.set(tableName, []);
       }
       columnsByTable.get(tableName)!.push({
-        column_name: row.column_name,
-        data_type: row.data_type,
-        is_nullable: row.is_nullable,
-        column_default: row.column_default,
-        character_maximum_length: row.character_maximum_length,
-        ordinal_position: row.ordinal_position,
-        is_primary_key: row.is_primary_key,
-        is_foreign_key: row.is_foreign_key,
-        foreign_key_table: row.foreign_key_table,
-        foreign_key_column: row.foreign_key_column,
+        column_name: typedRow.column_name,
+        data_type: typedRow.data_type,
+        is_nullable: typedRow.is_nullable === true || typedRow.is_nullable === 'YES',
+        column_default: typedRow.column_default,
+        character_maximum_length: typedRow.character_maximum_length,
+        ordinal_position: Number(typedRow.ordinal_position) || 0,
+        is_primary_key: typedRow.is_primary_key === true,
+        is_foreign_key: typedRow.is_foreign_key === true,
+        foreign_key_table: typedRow.foreign_key_table || undefined,
+        foreign_key_column: typedRow.foreign_key_column || undefined,
       });
     }
 
     // Build final tables array
     const tables: DatabaseTable[] = [];
     for (const row of tablesResult.rows) {
-      const columns = columnsByTable.get(row.table_name) || [];
+      const typedTableRow = row as { table_name: string; table_schema: string; row_count: string };
+      const columns = columnsByTable.get(typedTableRow.table_name) || [];
       tables.push({
-        table_name: row.table_name,
-        table_schema: row.table_schema,
+        table_name: typedTableRow.table_name,
+        table_schema: typedTableRow.table_schema,
         columns,
-        row_count: parseInt(row.row_count) || 0,
+        row_count: parseInt(typedTableRow.row_count) || 0,
       });
     }
 
@@ -377,18 +381,32 @@ export class DatabaseService {
     `;
 
     const result = await this.executeQuery(connectionId, query);
-    return result.rows.map((row: any) => ({
-      column_name: row.column_name,
-      data_type: row.data_type,
-      is_nullable: row.is_nullable,
-      column_default: row.column_default,
-      character_maximum_length: row.character_maximum_length,
-      ordinal_position: row.ordinal_position,
-      is_primary_key: row.is_primary_key,
-      is_foreign_key: row.is_foreign_key,
-      foreign_key_table: row.foreign_key_table,
-      foreign_key_column: row.foreign_key_column,
-    }));
+    return result.rows.map((row): DatabaseColumn => {
+      const typedRow = row as {
+        column_name: string;
+        data_type: string;
+        is_nullable: boolean | string;
+        column_default: string | null;
+        character_maximum_length: number | null;
+        ordinal_position: number | string;
+        is_primary_key: boolean;
+        is_foreign_key: boolean;
+        foreign_key_table: string | null;
+        foreign_key_column: string | null;
+      };
+      return {
+        column_name: typedRow.column_name,
+        data_type: typedRow.data_type,
+        is_nullable: typedRow.is_nullable === true || typedRow.is_nullable === 'YES',
+        column_default: typedRow.column_default,
+        character_maximum_length: typedRow.character_maximum_length,
+        ordinal_position: Number(typedRow.ordinal_position) || 0,
+        is_primary_key: typedRow.is_primary_key === true,
+        is_foreign_key: typedRow.is_foreign_key === true,
+        foreign_key_table: typedRow.foreign_key_table || undefined,
+        foreign_key_column: typedRow.foreign_key_column || undefined,
+      };
+    });
   }
 
   static async getFullSchema(
@@ -433,7 +451,7 @@ export class DatabaseService {
   ): Promise<number> {
     const query = `SELECT COUNT(*) as count FROM "${schemaName}"."${tableName}"`;
     const result = await this.executeQuery(connectionId, query);
-    return parseInt(result.rows[0].count) || 0;
+    return parseInt((result.rows[0] as { count: string }).count) || 0;
   }
 
   // Cleanup all connections when the app is closing

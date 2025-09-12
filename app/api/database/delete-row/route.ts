@@ -13,8 +13,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Build WHERE clause from primary key
-        const whereConditions = Object.entries(primaryKey)
-            .map(([key, value]) => `"${key}" = $${Object.keys(primaryKey).indexOf(key) + 1}`)
+        const whereConditions = Object.keys(primaryKey)
+            .map((key, index) => `"${key}" = $${index + 1}`)
             .join(" AND ");
 
         const query = `DELETE FROM "${schema}"."${tableName}" WHERE ${whereConditions}`;
@@ -30,12 +30,12 @@ export async function POST(request: NextRequest) {
             rowsAffected: result.rowCount,
             message: `Deleted ${result.rowCount} row(s)`
         });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Delete row error:", error);
 
         // Handle foreign key constraint violations specifically
-        if (error.code === '23503') {
-            const detail = error.detail || '';
+        if (error && typeof error === 'object' && 'code' in error && error.code === '23503') {
+            const detail = ('detail' in error && typeof error.detail === 'string') ? error.detail : '';
             const referencedTable = detail.match(/from table "([^"]+)"/)?.[1];
             const keyValue = detail.match(/Key \([^)]+\)=\(([^)]+)\)/)?.[1];
 
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
                 {
                     error: "Cannot delete this record because it is referenced by other data",
                     errorType: "FOREIGN_KEY_VIOLATION",
-                    detail: error.detail,
+                    detail,
                     referencedTable,
                     keyValue,
                     suggestion: referencedTable
@@ -54,8 +54,9 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        const errorMessage = error instanceof Error ? error.message : "Failed to delete row";
         return NextResponse.json(
-            { error: error.message || "Failed to delete row" },
+            { error: errorMessage },
             { status: 500 }
         );
     }

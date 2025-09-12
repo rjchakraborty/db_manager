@@ -121,7 +121,7 @@ export class SQLIntelligenceProvider {
     ];
 
     // Get completions based on current context
-    getCompletions(model: any, position: any): SQLCompletionItem[] {
+    getCompletions(model: { getValueInRange: (range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }) => string; getLineContent: (lineNumber: number) => string; getWordUntilPosition: (position: { lineNumber: number; column: number }) => { word: string; startColumn: number; endColumn: number } }, position: { lineNumber: number; column: number }): SQLCompletionItem[] {
         const textUntilPosition = model.getValueInRange({
             startLineNumber: 1,
             startColumn: 1,
@@ -129,7 +129,7 @@ export class SQLIntelligenceProvider {
             endColumn: position.column,
         });
 
-        const currentLine = model.getLineContent(position.lineNumber);
+        // const currentLine = model.getLineContent(position.lineNumber);
         const wordInfo = model.getWordUntilPosition(position);
         const word = wordInfo.word.toUpperCase();
 
@@ -308,7 +308,7 @@ export class SQLIntelligenceProvider {
     }
 
     // Get hover information for SQL elements
-    getHoverInfo(model: any, position: any): string | null {
+    getHoverInfo(model: { getWordAtPosition: (position: { lineNumber: number; column: number }) => { word: string } | null }, position: { lineNumber: number; column: number }): string | null {
         const word = model.getWordAtPosition(position);
         if (!word) return null;
 

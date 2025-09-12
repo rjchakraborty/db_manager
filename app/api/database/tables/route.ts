@@ -17,11 +17,12 @@ export async function GET(request: NextRequest) {
     const tables = await DatabaseService.getTables(connectionId, schemaName);
 
     return NextResponse.json({ tables });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Get tables error:", error);
 
+    const errorMessage = error instanceof Error ? error.message : "Failed to fetch tables";
     return NextResponse.json(
-      { error: error.message || "Failed to fetch tables" },
+      { error: errorMessage },
       { status: 500 }
     );
   }

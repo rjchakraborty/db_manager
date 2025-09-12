@@ -16,10 +16,11 @@ export async function GET(request: NextRequest) {
         // For now, we'll return an empty array as favorites are stored client-side
         return NextResponse.json({ favorites: [] });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error fetching favorites:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to fetch favorites";
         return NextResponse.json(
-            { error: error.message || "Failed to fetch favorites" },
+            { error: errorMessage },
             { status: 500 }
         );
     }
@@ -49,10 +50,11 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({ favorite });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error saving favorite:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to save favorite";
         return NextResponse.json(
-            { error: error.message || "Failed to save favorite" },
+            { error: errorMessage },
             { status: 500 }
         );
     }
@@ -74,10 +76,11 @@ export async function DELETE(request: NextRequest) {
         // For now, we'll just return success as favorites are stored client-side
         return NextResponse.json({ success: true });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error deleting favorite:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to delete favorite";
         return NextResponse.json(
-            { error: error.message || "Failed to delete favorite" },
+            { error: errorMessage },
             { status: 500 }
         );
     }

@@ -37,7 +37,7 @@ export interface DatabaseColumn {
 }
 
 export interface QueryResult {
-  rows: any[];
+  rows: Record<string, unknown>[];
   fields: {
     name: string;
     dataTypeID: number;
@@ -60,7 +60,7 @@ export interface QueryError {
 export interface AIQueryRequest {
   naturalLanguage: string;
   context?: {
-    tables: DatabaseTable[] | any[]; // Allow enhanced table format
+    tables: DatabaseTable[] | Record<string, unknown>[]; // Allow enhanced table format
     currentSchema: string;
     availableTables?: string[];
     tableNames?: string[]; // Add simple table names list

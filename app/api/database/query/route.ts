@@ -15,11 +15,12 @@ export async function POST(request: NextRequest) {
     const result = await DatabaseService.executeQuery(connectionId, query);
 
     return NextResponse.json({ result });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Query execution error:", error);
 
+    const errorMessage = error instanceof Error ? error.message : "Failed to execute query";
     return NextResponse.json(
-      { error: error.message || "Failed to execute query" },
+      { error: errorMessage },
       { status: 500 }
     );
   }

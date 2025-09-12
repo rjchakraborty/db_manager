@@ -37,9 +37,10 @@ export const decrypt = (encryptedText: string): string => {
     }
 
     return originalText;
-  } catch (error) {
+  } catch (_error) {
     // Suppress noisy console errors for expected cases (e.g., legacy/plaintext data)
-    throw new Error("DECRYPT_FAILED");
+    const message = _error instanceof Error ? _error.message : "Unknown error";
+    throw new Error("DECRYPT_FAILED" + message);
   }
 };
 
@@ -74,7 +75,7 @@ export const secureStorage = {
       try {
         // Normal path: decrypt previously stored cipher text
         return decryptObject<T>(encrypted);
-      } catch (decryptError: any) {
+      } catch (_decryptError: unknown) {
         // Backward-compat: attempt to parse plaintext JSON (legacy storage)
         try {
           const parsed = JSON.parse(encrypted) as T;

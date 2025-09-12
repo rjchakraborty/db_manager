@@ -41,7 +41,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Create cache key based on schema structure and selected table
-        const tableNames = fullSchema.flatMap((s: any) => s.tables.map((t: any) => `${s.schema_name}.${t.table_name}`)).sort();
+        const tableNames = fullSchema.flatMap((s: { schema_name: string; tables: Array<{ table_name: string }> }) =>
+            s.tables.map((t: { table_name: string }) => `${s.schema_name}.${t.table_name}`)).sort();
         const cacheKey = `${connectionId}-${tableNames.join(',')}-${selectedTable?.schema || ''}.${selectedTable?.table || ''}`;
 
         // Check cache first
@@ -62,13 +63,28 @@ export async function POST(request: NextRequest) {
         rateLimits.set(connectionId, { ...currentRateLimit, count: currentRateLimit.count + 1 });
 
         // Build simplified context (only table names and key columns)
-        const simplifiedTables = fullSchema.flatMap((schema: any) =>
-            schema.tables.map((table: any) => ({
+        interface Column {
+            column_name: string;
+            is_primary_key: boolean;
+        }
+
+        interface Table {
+            table_name: string;
+            columns: Column[];
+        }
+
+        interface Schema {
+            schema_name: string;
+            tables: Table[];
+        }
+
+        const simplifiedTables = fullSchema.flatMap((schema: Schema) =>
+            schema.tables.map((table: Table) => ({
                 name: `${schema.schema_name}.${table.table_name}`,
                 keyColumns: table.columns
-                    .filter((col: any) => col.is_primary_key || col.column_name.includes('id') || col.column_name.includes('name') || col.column_name.includes('date'))
+                    .filter((col: Column) => col.is_primary_key || col.column_name.includes('id') || col.column_name.includes('name') || col.column_name.includes('date'))
                     .slice(0, 3)
-                    .map((col: any) => col.column_name)
+                    .map((col: Column) => col.column_name)
             }))
         ).slice(0, 5); // Limit to 5 tables max
 
@@ -121,7 +137,7 @@ Return JSON array only: ["suggestion1", "suggestion2", ...]`;
 
         return NextResponse.json({ suggestions });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error generating suggestions:", error);
 
         // Return basic fallback suggestions on error
@@ -141,14 +157,29 @@ Return JSON array only: ["suggestion1", "suggestion2", ...]`;
 }
 
 // Generate intelligent fallback suggestions without AI
-function generateFallbackSuggestions(fullSchema: any[], selectedTable?: { schema: string; table: string }): string[] {
-    const allTables = fullSchema.flatMap((schema: any) =>
-        schema.tables.map((table: any) => ({
+interface FallbackColumn {
+    column_name: string;
+    data_type: string;
+}
+
+interface FallbackTable {
+    table_name: string;
+    columns: FallbackColumn[];
+}
+
+interface FallbackSchema {
+    schema_name: string;
+    tables: FallbackTable[];
+}
+
+function generateFallbackSuggestions(fullSchema: FallbackSchema[], selectedTable?: { schema: string; table: string }): string[] {
+    const allTables = fullSchema.flatMap((schema: FallbackSchema) =>
+        schema.tables.map((table: FallbackTable) => ({
             name: table.table_name,
             schema: schema.schema_name,
             fullName: `${schema.schema_name}.${table.table_name}`,
             columns: table.columns || [],
-            rowCount: table.row_count
+            rowCount: (table as FallbackTable & { row_count?: number }).row_count
         }))
     );
 
@@ -168,16 +199,16 @@ function generateFallbackSuggestions(fullSchema: any[], selectedTable?: { schema
         suggestions.push(`Count total records in ${focusTable.name}`);
 
         // Column-based suggestions
-        const dateColumns = focusTable.columns.filter((col: any) =>
+        const dateColumns = focusTable.columns.filter((col: FallbackColumn) =>
             col.data_type.includes('timestamp') || col.data_type.includes('date') ||
             col.column_name.includes('date') || col.column_name.includes('created') || col.column_name.includes('updated')
         );
 
-        const nameColumns = focusTable.columns.filter((col: any) =>
+        const nameColumns = focusTable.columns.filter((col: FallbackColumn) =>
             col.column_name.includes('name') || col.column_name.includes('title') || col.column_name.includes('description')
         );
 
-        const idColumns = focusTable.columns.filter((col: any) =>
+        const idColumns = focusTable.columns.filter((col: FallbackColumn & { is_primary_key?: boolean }) =>
             col.column_name.includes('id') && !col.is_primary_key
         );
 

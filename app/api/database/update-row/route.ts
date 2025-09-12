@@ -13,8 +13,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Build WHERE clause from primary key
-        const whereConditions = Object.entries(primaryKey)
-            .map(([key, value]) => `"${key}" = $${Object.keys(primaryKey).indexOf(key) + 1}`)
+        const whereConditions = Object.keys(primaryKey)
+            .map((key, index) => `"${key}" = $${index + 1}`)
             .join(" AND ");
 
         // Build SET clause from updates
@@ -37,10 +37,11 @@ export async function POST(request: NextRequest) {
             rowsAffected: result.rowCount,
             message: `Updated ${result.rowCount} row(s)`
         });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Update row error:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to update row";
         return NextResponse.json(
-            { error: error.message || "Failed to update row" },
+            { error: errorMessage },
             { status: 500 }
         );
     }

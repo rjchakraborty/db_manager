@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { DatabaseConnection } from "@/types/database";
 import { secureStorage } from "@/lib/encryption";
 import { generateId } from "@/lib/utils";
@@ -68,16 +68,9 @@ export default function SettingsModal({
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
-  useEffect(() => {
-    if (isOpen) {
-      loadConnections();
-      loadDefaultConnection();
-      checkSchemaCacheStatus();
-      loadGeminiApiKey();
-    }
-  }, [isOpen]);
 
-  const checkSchemaCacheStatus = () => {
+
+  const checkSchemaCacheStatus = useCallback(() => {
     try {
       const cached = localStorage.getItem('db-schema-cache');
       if (cached) {
@@ -95,7 +88,7 @@ export default function SettingsModal({
     } catch (error) {
       console.error('Error checking schema cache status:', error);
     }
-  };
+  }, [connections]);
 
   const loadConnections = () => {
     try {
@@ -149,6 +142,15 @@ export default function SettingsModal({
       console.error("Error loading Gemini API key:", error);
     }
   };
+
+  useEffect(() => {
+    if (isOpen) {
+      loadConnections();
+      loadDefaultConnection();
+      checkSchemaCacheStatus();
+      loadGeminiApiKey();
+    }
+  }, [isOpen, checkSchemaCacheStatus]);
 
   const saveGeminiApiKey = (keyValue?: string) => {
     const keyToSave = keyValue || geminiApiKey;
@@ -222,8 +224,9 @@ export default function SettingsModal({
         password: decodeURIComponent(parsedUrl.password),
         ssl: ssl,
       };
-    } catch (error: any) {
-      setUrlParseError(error.message || 'Invalid connection URL format');
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Invalid connection URL format';
+      setUrlParseError(errorMessage);
       return null;
     }
   };
@@ -358,10 +361,10 @@ export default function SettingsModal({
           setTestingConnection(false);
           setTestResult(null);
         }, 1500);
-      } catch (error: any) {
+      } catch (error: unknown) {
         setTestResult({
           success: false,
-          message: error.message || "Failed to connect"
+          message: error instanceof Error ? error.message : "Failed to connect"
         });
         setTestingConnection(false);
       }
@@ -440,11 +443,11 @@ export default function SettingsModal({
           message: result.success ? "Connection successful!" : (result.error || "Connection failed")
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Test connection error:", error);
       setTestResult({
         success: false,
-        message: error.message || "Failed to test connection"
+        message: error instanceof Error ? error.message : "Failed to test connection"
       });
     } finally {
       setTestingConnection(false);

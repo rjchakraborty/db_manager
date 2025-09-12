@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { DatabaseTable, QueryResult, DatabaseColumn } from "@/types/database";
 import { formatNumber, copyToClipboard, downloadAsFile } from "@/lib/utils";
@@ -18,7 +18,6 @@ import {
   Save,
   X,
   Trash2,
-  AlertTriangle,
   FileJson,
 } from "lucide-react";
 
@@ -46,30 +45,18 @@ export default function TableViewer({
   // Editing states
   const [editingCell, setEditingCell] = useState<{ rowIndex: number, fieldName: string } | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
-  const [pendingUpdates, setPendingUpdates] = useState<Map<number, Record<string, any>>>(new Map());
+  const [pendingUpdates, setPendingUpdates] = useState<Map<number, Record<string, string | number | boolean | null>>>(new Map());
   const [deletingRows, setDeletingRows] = useState<Set<number>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
-  const [dependencies, setDependencies] = useState<any[]>([]);
+  const [dependencies, setDependencies] = useState<Array<{ table: string; column: string }>>([]);
   const [checkingDependencies, setCheckingDependencies] = useState(false);
 
   const editInputRef = useRef<HTMLInputElement>(null);
   const rowsPerPage = 100;
 
-  useEffect(() => {
-    if (queryResult) {
-      // Use query result data
-      setData(queryResult);
-      setTotalRows(queryResult.rowCount);
-      setError(null);
-    } else if (connectionId && schema && tableName) {
-      // Load table data
-      loadTableData();
-      loadRowCount();
-    }
-  }, [connectionId, schema, tableName, currentPage, queryResult]);
 
-  const loadTableData = async () => {
+  const loadTableData = useCallback(async () => {
     if (!connectionId) return;
 
     setLoading(true);
@@ -91,15 +78,16 @@ export default function TableViewer({
 
       const { result } = await response.json();
       setData(result);
-    } catch (err: any) {
-      setError(err.message || "Failed to load table data");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to load table data";
+      setError(errorMessage);
       console.error("Table data loading error:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [connectionId, schema, tableName, currentPage]);
 
-  const loadRowCount = async () => {
+  const loadRowCount = useCallback(async () => {
     if (!connectionId) return;
 
     try {
@@ -117,11 +105,25 @@ export default function TableViewer({
 
       const { result } = await response.json();
       setTotalRows(parseInt(result.rows[0].count) || 0);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Row count loading error:", err);
       // Don't set error state for row count failures
     }
-  };
+  }, [connectionId, schema, tableName]);
+
+
+  useEffect(() => {
+    if (queryResult) {
+      // Use query result data
+      setData(queryResult);
+      setTotalRows(queryResult.rowCount);
+      setError(null);
+    } else if (connectionId && schema && tableName) {
+      // Load table data
+      loadTableData();
+      loadRowCount();
+    }
+  }, [connectionId, schema, tableName, currentPage, queryResult, loadTableData, loadRowCount]);
 
   const handleRefresh = () => {
     loadTableData();
@@ -139,9 +141,9 @@ export default function TableViewer({
     return table?.columns.filter(col => col.is_primary_key) || [];
   };
 
-  const getPrimaryKeyValue = (row: any): Record<string, any> => {
+  const getPrimaryKeyValue = (row: Record<string, unknown>): Record<string, unknown> => {
     const pkColumns = getPrimaryKeyColumns();
-    const pkValue: Record<string, any> = {};
+    const pkValue: Record<string, unknown> = {};
     pkColumns.forEach(col => {
       pkValue[col.column_name] = row[col.column_name];
     });
@@ -179,7 +181,7 @@ export default function TableViewer({
     return null;
   };
 
-  const startEditing = (rowIndex: number, fieldName: string, currentValue: any) => {
+  const startEditing = (rowIndex: number, fieldName: string, currentValue: unknown) => {
     if (!isColumnEditable(fieldName)) return;
 
     setEditingCell({ rowIndex, fieldName });
@@ -282,9 +284,10 @@ export default function TableViewer({
       const result = await response.json();
       console.log('Update successful:', result.message);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to update row";
       console.error("Update error:", error);
-      alert(`Failed to update row: ${error.message}`);
+      alert(`Failed to update row: ${errorMessage}`);
       // Revert changes on error
       discardChanges(rowIndex);
     } finally {
@@ -319,7 +322,7 @@ export default function TableViewer({
       setDependencies(result.dependencies || []);
       setConfirmDelete(rowIndex);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Dependency check error:", error);
       // Still allow deletion attempt, but without dependency info
       setDependencies([]);
@@ -334,7 +337,7 @@ export default function TableViewer({
 
     try {
       const row = data.rows[rowIndex];
-      const jsonData: Record<string, any> = {};
+      const jsonData: Record<string, unknown> = {};
 
       // Process each field with proper type conversion
       data.fields.forEach(field => {
@@ -375,9 +378,10 @@ export default function TableViewer({
       // Show success feedback (you could replace this with a toast notification)
       console.log('Row copied as JSON:', formattedJSON);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to copy row as JSON";
       console.error("JSON copy error:", error);
-      alert(`Failed to copy row as JSON: ${error.message}`);
+      alert(`Failed to copy row as JSON: ${errorMessage}`);
     }
   };
 
@@ -423,9 +427,10 @@ export default function TableViewer({
       const result = await response.json();
       console.log('Delete successful:', result.message);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to delete row";
       console.error("Delete error:", error);
-      alert(`Failed to delete row: ${error.message}`);
+      alert(`Failed to delete row: ${errorMessage}`);
     } finally {
       setUpdating(false);
     }
@@ -678,7 +683,7 @@ export default function TableViewer({
                   <table className="w-full min-w-max table-auto">
                     <thead className="bg-white border-b-2 border-black sticky top-0 z-10">
                       <tr>
-                        {data.fields.map((field, index) => (
+                        {data.fields.map((field) => (
                           <th
                             key={field.name}
                             className="px-4 py-3 text-left text-xs font-medium text-black tracking-wider border-b border-gray-400 whitespace-nowrap min-w-[120px] bg-white">
