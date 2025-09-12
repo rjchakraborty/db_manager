@@ -7,7 +7,7 @@ on run
         display notification "Starting DB Manager deployment..." with title "DB Manager Launcher"
         
         -- Set project path
-        set projectPath to "/Users/rj/work/projects/python/db_manager"
+        set projectPath to "/Users/rj/work/projects/web/personal/db_manager"
         
         -- Run the deployment script
         set shellScript to "cd " & quoted form of projectPath & " && ./deploy-and-open.sh"

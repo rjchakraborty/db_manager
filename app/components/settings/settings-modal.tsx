@@ -147,10 +147,16 @@ export default function SettingsModal({
     if (isOpen) {
       loadConnections();
       loadDefaultConnection();
-      checkSchemaCacheStatus();
       loadGeminiApiKey();
     }
-  }, [isOpen, checkSchemaCacheStatus]);
+  }, [isOpen]);
+
+  // Separate effect to check schema cache status when connections change
+  useEffect(() => {
+    if (isOpen && connections.length > 0) {
+      checkSchemaCacheStatus();
+    }
+  }, [isOpen, connections, checkSchemaCacheStatus]);
 
   const saveGeminiApiKey = (keyValue?: string) => {
     const keyToSave = keyValue || geminiApiKey;

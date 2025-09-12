@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 # Configuration
 PORT=3005
 PROJECT_NAME="DB Manager"
-PROJECT_DIR="/Users/rj/work/projects/python/db_manager"
+PROJECT_DIR="/Users/rj/work/projects/web/personal/db_manager"
 
 echo -e "${BLUE}🚀 Starting $PROJECT_NAME deployment...${NC}"
 
