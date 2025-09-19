@@ -5,10 +5,12 @@ import DatabaseNavigator from "@/components/database/database-navigator";
 import TableViewer from "@/components/database/table-viewer";
 import EnhancedAIAssistant from "@/components/ai-assistant/enhanced-ai-assistant";
 import SettingsModal from "@/components/settings/settings-modal";
+import DataViewer from "@/components/ui/data-viewer";
 import {
     DatabaseConnection,
     DatabaseTable,
     QueryResult,
+    DatabaseColumn,
 } from "@/types/database";
 import { Settings, Menu, X, RefreshCw } from "lucide-react";
 import { ConnectionManager } from "@/lib/connection-manager";
@@ -37,6 +39,21 @@ export default function Home() {
         timestamp: number;
         tables: DatabaseTable[];
     }>>(new Map());
+    const [dataViewer, setDataViewer] = useState<{
+        isVisible: boolean;
+        data: unknown;
+        dataType: string;
+        columnName: string;
+        tableName?: string;
+        column?: DatabaseColumn;
+        rowIndex: number;
+    }>({
+        isVisible: false,
+        data: null,
+        dataType: "text",
+        columnName: "",
+        rowIndex: -1,
+    });
 
     // Load connections and auto-connect on page load
     useEffect(() => {
@@ -367,6 +384,80 @@ export default function Home() {
         // SQL generated, will be handled in the enhanced AI assistant
     };
 
+    // DataViewer handlers
+    const openDataViewer = (data: unknown, columnName: string, dataType: string, tableName?: string, column?: DatabaseColumn, rowIndex: number = -1) => {
+        setDataViewer({
+            isVisible: true,
+            data,
+            dataType,
+            columnName,
+            tableName,
+            column,
+            rowIndex,
+        });
+    };
+
+    const handleDataViewerSave = async (newValue: unknown) => {
+        if (!selectedConnection || !selectedTable || dataViewer.rowIndex === -1) {
+            throw new Error("Cannot save: missing connection, table, or row information");
+        }
+
+        try {
+            // Get the current table data to find the row
+            const tableData = await fetch(`/api/database/query`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    connectionId: selectedConnection.id,
+                    query: `SELECT * FROM "${selectedTable.schema}"."${selectedTable.table}" LIMIT 100`,
+                }),
+            });
+
+            if (!tableData.ok) {
+                throw new Error("Failed to fetch current table data");
+            }
+
+            const { result } = await tableData.json();
+            const row = result.rows[dataViewer.rowIndex];
+
+            // Find primary key for the row
+            const table = availableTables.find(t => t.table_name === selectedTable.table);
+            const primaryKeyColumn = table?.columns.find(col => col.is_primary_key);
+
+            if (!primaryKeyColumn) {
+                throw new Error("Cannot update row: no primary key found");
+            }
+
+            const primaryKey = {
+                column: primaryKeyColumn.column_name,
+                value: row[primaryKeyColumn.column_name]
+            };
+
+            // Update the row
+            const response = await fetch("/api/database/update-row", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    connectionId: selectedConnection.id,
+                    schema: selectedTable.schema,
+                    tableName: selectedTable.table,
+                    primaryKey,
+                    updates: { [dataViewer.columnName]: newValue }
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || "Failed to update row");
+            }
+
+            console.log('DataViewer save successful');
+        } catch (error) {
+            console.error('DataViewer save error:', error);
+            throw error;
+        }
+    };
+
     return (
         <div className="h-screen flex flex-col bg-white">
             {/* Header */}
@@ -462,6 +553,7 @@ export default function Home() {
                                     tableName={selectedTable?.table || ""}
                                     table={selectedTable ? availableTables.find(t => t.table_name === selectedTable.table) : undefined}
                                     queryResult={queryResult}
+                                    onDataViewerOpen={openDataViewer}
                                 />
                             ) : (
                                 <div className="flex-1 flex items-center justify-center text-gray-500">
@@ -484,23 +576,43 @@ export default function Home() {
                             )}
                         </div>
 
-                        {/* AI SQL Assistant - Resizable */}
+                        {/* AI SQL Assistant + DataViewer - Resizable */}
                         <ResizablePanel
                             defaultWidth={320}
                             minWidth={280}
                             maxWidth={600}
                             storageKey="ai-assistant-width"
-                            className="bg-gray-50"
+                            className="bg-gray-50 flex flex-col"
                             position="left"
                         >
-                            <EnhancedAIAssistant
-                                connectionId={selectedConnection.id}
-                                tables={availableTables}
-                                currentSchema={currentSchema}
-                                onQueryExecute={handleQueryExecute}
-                                fullSchema={fullSchema}
-                                selectedTable={selectedTable}
-                            />
+                            {/* AI Assistant - Takes available space when no data viewer */}
+                            <div className={`${dataViewer.isVisible ? 'flex-1' : 'h-full'} min-h-0`}>
+                                <EnhancedAIAssistant
+                                    connectionId={selectedConnection.id}
+                                    tables={availableTables}
+                                    currentSchema={currentSchema}
+                                    onQueryExecute={handleQueryExecute}
+                                    fullSchema={fullSchema}
+                                    selectedTable={selectedTable}
+                                />
+                            </div>
+
+                            {/* DataViewer Panel - Larger height when visible */}
+                            {dataViewer.isVisible && (
+                                <div className="h-96 flex-shrink-0">
+                                    <DataViewer
+                                        isVisible={dataViewer.isVisible}
+                                        data={dataViewer.data}
+                                        dataType={dataViewer.dataType}
+                                        columnName={dataViewer.columnName}
+                                        tableName={dataViewer.tableName}
+                                        isEditable={!!selectedConnection}
+                                        column={dataViewer.column}
+                                        onSave={handleDataViewerSave}
+                                        rowIndex={dataViewer.rowIndex}
+                                    />
+                                </div>
+                            )}
                         </ResizablePanel>
                     </div>
                 ) : (

@@ -28,6 +28,7 @@ interface QueryEditorProps {
   isAIEnabled?: boolean;
   tables?: DatabaseTable[]; // Schema data for intelligent suggestions
   currentSchema?: string;
+  onDataViewerOpen?: (data: unknown, columnName: string, dataType: string, tableName?: string) => void;
 }
 
 export default function QueryEditor({
@@ -39,6 +40,7 @@ export default function QueryEditor({
   isAIEnabled = false,
   tables = [],
   currentSchema = "public",
+  onDataViewerOpen,
 }: QueryEditorProps) {
   const [query, setQuery] = useState(initialQuery);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -53,9 +55,17 @@ export default function QueryEditor({
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteDescription, setFavoriteDescription] = useState("");
 
+
   const editorRef = useRef<{ getValue: () => string; setValue: (value: string) => void; focus: () => void } | null>(null);
   const sqlIntelligence = useRef<SQLIntelligenceProvider>(new SQLIntelligenceProvider(tables, currentSchema));
   const aiRateLimiter = useRef<AIRateLimiter>(new AIRateLimiter(5, 1)); // 5 calls per minute
+
+  // Helper function to handle cell clicks
+  const handleCellClick = (data: unknown, columnName: string) => {
+    if (onDataViewerOpen) {
+      onDataViewerOpen(data, columnName, "text", "Query Results");
+    }
+  };
 
 
 
@@ -633,9 +643,10 @@ export default function QueryEditor({
                                 {result.fields.map((field) => (
                                   <td
                                     key={field.name}
-                                    className="px-4 py-2 text-sm text-gray-900 border-b border-gray-200 min-w-[120px] max-w-[400px] whitespace-nowrap"
-                                    title={String(row[field.name])}>
-                                    <div className="truncate cursor-help">
+                                    className="px-4 py-2 text-sm text-gray-900 border-b border-gray-200 min-w-[120px] max-w-[400px] whitespace-nowrap cursor-pointer hover:bg-gray-100"
+                                    title={String(row[field.name])}
+                                    onClick={() => handleCellClick(row[field.name], field.name)}>
+                                    <div className="truncate">
                                       {row[field.name] === null ? (
                                         <span className="text-gray-400 italic">
                                           NULL
@@ -760,6 +771,7 @@ export default function QueryEditor({
           </div>
         )}
       </div>
+
     </div>
   );
 }

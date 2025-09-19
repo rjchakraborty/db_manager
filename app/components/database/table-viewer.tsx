@@ -14,7 +14,6 @@ import {
   ChevronRight,
   Key,
   Link,
-  Edit3,
   Save,
   X,
   Trash2,
@@ -27,6 +26,7 @@ interface TableViewerProps {
   tableName: string;
   table?: DatabaseTable;
   queryResult?: QueryResult | null;
+  onDataViewerOpen?: (data: unknown, columnName: string, dataType: string, tableName?: string, column?: DatabaseColumn, rowIndex?: number) => void;
 }
 
 export default function TableViewer({
@@ -35,6 +35,7 @@ export default function TableViewer({
   tableName,
   table,
   queryResult,
+  onDataViewerOpen,
 }: TableViewerProps) {
   const [data, setData] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,18 +43,31 @@ export default function TableViewer({
   const [currentPage, setCurrentPage] = useState(1);
   const [totalRows, setTotalRows] = useState(0);
 
-  // Editing states
-  const [editingCell, setEditingCell] = useState<{ rowIndex: number, fieldName: string } | null>(null);
-  const [editingValue, setEditingValue] = useState<string>("");
-  const [pendingUpdates, setPendingUpdates] = useState<Map<number, Record<string, string | number | boolean | null>>>(new Map());
-  const [deletingRows, setDeletingRows] = useState<Set<number>>(new Set());
+  // Editing states (simplified - most editing now handled by DataViewer)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
   const [dependencies, setDependencies] = useState<Array<{ table: string; column: string }>>([]);
   const [checkingDependencies, setCheckingDependencies] = useState(false);
 
+
   const editInputRef = useRef<HTMLInputElement>(null);
   const rowsPerPage = 100;
+
+  // Helper function to open data viewer
+  const handleCellClick = (data: unknown, columnName: string, column?: DatabaseColumn, rowIdx: number = -1) => {
+    if (onDataViewerOpen) {
+      onDataViewerOpen(
+        data, 
+        columnName, 
+        column?.data_type || "text", 
+        `${schema}.${tableName}`, 
+        column, 
+        rowIdx
+      );
+    }
+  };
+
+
 
 
   const loadTableData = useCallback(async (retryCount = 0) => {
@@ -165,9 +179,6 @@ export default function TableViewer({
     loadTableData();
     loadRowCount();
     // Clear editing states on refresh
-    setEditingCell(null);
-    setPendingUpdates(new Map());
-    setDeletingRows(new Set());
     setConfirmDelete(null);
     setDependencies([]);
   };
@@ -217,119 +228,6 @@ export default function TableViewer({
     return null;
   };
 
-  const startEditing = (rowIndex: number, fieldName: string, currentValue: unknown) => {
-    if (!isColumnEditable(fieldName)) return;
-
-    setEditingCell({ rowIndex, fieldName });
-    setEditingValue(currentValue === null ? "" : String(currentValue));
-
-    // Focus the input after state update
-    setTimeout(() => {
-      editInputRef.current?.focus();
-      editInputRef.current?.select();
-    }, 0);
-  };
-
-  const cancelEditing = () => {
-    setEditingCell(null);
-    setEditingValue("");
-  };
-
-  const saveEdit = () => {
-    if (!editingCell || !data) return;
-
-    const { rowIndex, fieldName } = editingCell;
-    const column = table?.columns.find(col => col.column_name === fieldName);
-
-    if (column) {
-      const validationError = validateValue(editingValue, column);
-      if (validationError) {
-        alert(validationError);
-        return;
-      }
-    }
-
-    // Convert empty string to null for nullable columns
-    const finalValue = editingValue === "" && column?.is_nullable ? null : editingValue;
-
-    // Update pending changes
-    const currentUpdates = pendingUpdates.get(rowIndex) || {};
-    const newUpdates = { ...currentUpdates, [fieldName]: finalValue };
-    const updatedMap = new Map(pendingUpdates);
-    updatedMap.set(rowIndex, newUpdates);
-    setPendingUpdates(updatedMap);
-
-    // Update the display data
-    const newData = { ...data };
-    newData.rows[rowIndex][fieldName] = finalValue;
-    setData(newData);
-
-    cancelEditing();
-  };
-
-  const discardChanges = (rowIndex: number) => {
-    if (!data) return;
-
-    // Reload original data for this row
-    const updatedMap = new Map(pendingUpdates);
-    updatedMap.delete(rowIndex);
-    setPendingUpdates(updatedMap);
-
-    // Refresh the table to get original data
-    handleRefresh();
-  };
-
-  const commitUpdates = async (rowIndex: number) => {
-    if (!connectionId || !data || !table) {
-      return;
-    }
-
-    const updates = pendingUpdates.get(rowIndex);
-    if (!updates || Object.keys(updates).length === 0) {
-      return;
-    }
-
-    setUpdating(true);
-    try {
-      const row = data.rows[rowIndex];
-      const primaryKey = getPrimaryKeyValue(row);
-
-      const response = await fetch("/api/database/update-row", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionId,
-          schema,
-          tableName,
-          primaryKey,
-          updates
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to update row");
-      }
-
-      // Remove from pending updates
-      const updatedMap = new Map(pendingUpdates);
-      updatedMap.delete(rowIndex);
-      setPendingUpdates(updatedMap);
-
-      // Show success message
-      const result = await response.json();
-      console.log('Update successful:', result.message);
-
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to update row";
-      console.error("Update error:", error);
-      alert(`Failed to update row: ${errorMessage}`);
-      // Revert changes on error
-      discardChanges(rowIndex);
-    } finally {
-      setUpdating(false);
-    }
-  };
 
   const checkDependencies = async (rowIndex: number) => {
     if (!connectionId || !data || !table) return;
@@ -539,46 +437,8 @@ export default function TableViewer({
           <div className="flex items-center space-x-3">
             {!queryResult && connectionId && (
               <>
-                {/* Edit Mode */}
-                {pendingUpdates.size > 0 && (
-                  <>
-                    <div className="flex items-center text-sm bg-yellow-50 border border-yellow-200 px-3 py-1.5 rounded">
-                      <Edit3 className="h-4 w-4 mr-2 text-yellow-600" />
-                      <span className="text-yellow-800 font-medium">
-                        {pendingUpdates.size} unsaved change{pendingUpdates.size !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                      <Button
-                        onClick={() => {
-                          const rowIndex = Array.from(pendingUpdates.keys())[0];
-                          commitUpdates(rowIndex);
-                        }}
-                        disabled={updating}
-                        size="sm"
-                        className="bg-green-600 hover:bg-green-700 text-white">
-                        <Save className="h-4 w-4 mr-1" />
-                        Save
-                      </Button>
-
-                      <Button
-                        onClick={() => {
-                          const rowIndex = Array.from(pendingUpdates.keys())[0];
-                          discardChanges(rowIndex);
-                        }}
-                        disabled={updating}
-                        variant="outline"
-                        size="sm">
-                        <X className="h-4 w-4 mr-1" />
-                        Cancel
-                      </Button>
-                    </div>
-                  </>
-                )}
-
                 {/* Delete Mode */}
-                {confirmDelete !== null && pendingUpdates.size === 0 && (
+                {confirmDelete !== null && (
                   <>
                     <div className="flex items-center text-sm bg-red-50 border border-red-200 px-3 py-1.5 rounded">
                       <Trash2 className="h-4 w-4 mr-2 text-red-600" />
@@ -625,7 +485,7 @@ export default function TableViewer({
               onClick={handleRefresh}
               variant="outline"
               size="sm"
-              disabled={loading || pendingUpdates.size > 0 || confirmDelete !== null}>
+              disabled={loading || confirmDelete !== null}>
               <RefreshCw
                 className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`}
               />
@@ -636,7 +496,7 @@ export default function TableViewer({
               onClick={handleCopyData}
               variant="outline"
               size="sm"
-              disabled={!data || pendingUpdates.size > 0 || confirmDelete !== null}>
+              disabled={!data || confirmDelete !== null}>
               <Copy className="h-4 w-4 mr-1" />
               Copy
             </Button>
@@ -645,7 +505,7 @@ export default function TableViewer({
               onClick={handleDownloadData}
               variant="outline"
               size="sm"
-              disabled={!data || pendingUpdates.size > 0 || confirmDelete !== null}>
+              disabled={!data || confirmDelete !== null}>
               <Download className="h-4 w-4 mr-1" />
               Export
             </Button>
@@ -748,80 +608,41 @@ export default function TableViewer({
                     </thead>
                     <tbody className="bg-white">
                       {data.rows.map((row, rowIndex) => {
-                        const hasPendingUpdates = pendingUpdates.has(rowIndex);
-                        const isDeleting = deletingRows.has(rowIndex);
-
                         return (
                           <tr
                             key={rowIndex}
                             className={`
                               ${rowIndex % 2 === 0 ? "bg-white" : "bg-gray-50"}
-                              ${hasPendingUpdates ? "bg-yellow-50 border-l-4 border-yellow-400" : ""}
-                              ${isDeleting ? "bg-red-50 opacity-50" : ""}
                               ${confirmDelete === rowIndex ? "bg-red-100" : ""}
                             `}>
 
                             {data.fields.map((field) => {
-                              const isEditing = editingCell?.rowIndex === rowIndex && editingCell?.fieldName === field.name;
                               const isEditable = !queryResult && connectionId && isColumnEditable(field.name) && confirmDelete === null;
                               const column = table?.columns.find(col => col.column_name === field.name);
 
                               return (
                                 <td
                                   key={field.name}
-                                  className={`px-4 py-3 text-sm border-b border-gray-200 min-w-[120px] max-w-[400px] ${isEditable ? "cursor-pointer hover:bg-gray-100" : ""
-                                    } ${column?.is_primary_key ? "bg-gray-50" : ""}`}
-                                  onClick={() => !isEditing && isEditable && startEditing(rowIndex, field.name, row[field.name])}>
+                                  className={`px-4 py-3 text-sm border-b border-gray-200 min-w-[120px] max-w-[400px] cursor-pointer hover:bg-gray-100 ${column?.is_primary_key ? "bg-gray-50" : ""}`}
+                                  onClick={() => {
+                                    handleCellClick(
+                                      row[field.name], 
+                                      field.name, 
+                                      column, 
+                                      rowIndex
+                                    );
+                                  }}
+                                  title={String(row[field.name])}>
 
-                                  {isEditing ? (
-                                    <div className="flex items-center space-x-2">
-                                      <input
-                                        ref={editInputRef}
-                                        type="text"
-                                        value={editingValue}
-                                        onChange={(e) => setEditingValue(e.target.value)}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') saveEdit();
-                                          if (e.key === 'Escape') cancelEditing();
-                                        }}
-                                        className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:border-black"
-                                        placeholder={column?.is_nullable ? "NULL" : ""}
-                                      />
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          saveEdit();
-                                        }}
-                                        className="p-1 text-green-600 hover:text-green-800">
-                                        <Save className="h-3 w-3" />
-                                      </button>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          cancelEditing();
-                                        }}
-                                        className="p-1 text-gray-600 hover:text-gray-800">
-                                        <X className="h-3 w-3" />
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex items-center justify-between group">
-                                      <div
-                                        className="truncate flex-1"
-                                        title={String(row[field.name])}>
-                                        {row[field.name] === null ? (
-                                          <span className="text-gray-600 italic">
-                                            NULL
-                                          </span>
-                                        ) : (
-                                          String(row[field.name])
-                                        )}
-                                      </div>
-                                      {isEditable && (
-                                        <Edit3 className="h-3 w-3 text-gray-400 opacity-0 group-hover:opacity-100 ml-2 flex-shrink-0" />
-                                      )}
-                                    </div>
-                                  )}
+                                  <div className="truncate">
+                                    {row[field.name] === null ? (
+                                      <span className="text-gray-600 italic">
+                                        NULL
+                                      </span>
+                                    ) : (
+                                      String(row[field.name])
+                                    )}
+                                  </div>
                                 </td>
                               );
                             })}
@@ -833,27 +654,21 @@ export default function TableViewer({
                                   {/* Copy as JSON button */}
                                   <button
                                     onClick={() => copyRowAsJSON(rowIndex)}
-                                    disabled={updating || pendingUpdates.size > 0 || confirmDelete !== null}
+                                    disabled={updating || confirmDelete !== null}
                                     className="p-1 text-gray-400 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={
-                                      pendingUpdates.size > 0
-                                        ? "Save or cancel changes first"
-                                        : "Copy row as JSON"
-                                    }>
+                                    title="Copy row as JSON">
                                     <FileJson className="h-4 w-4" />
                                   </button>
 
                                   {/* Delete button */}
                                   <button
                                     onClick={() => checkDependencies(rowIndex)}
-                                    disabled={updating || pendingUpdates.size > 0 || confirmDelete !== null || checkingDependencies}
+                                    disabled={updating || confirmDelete !== null || checkingDependencies}
                                     className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={
-                                      pendingUpdates.size > 0
-                                        ? "Save or cancel changes first"
-                                        : checkingDependencies
-                                          ? "Checking dependencies..."
-                                          : "Delete row"
+                                      checkingDependencies
+                                        ? "Checking dependencies..."
+                                        : "Delete row"
                                     }>
                                     {checkingDependencies ? (
                                       <RefreshCw className="h-4 w-4 animate-spin" />
@@ -892,6 +707,7 @@ export default function TableViewer({
           </div>
         )}
       </div>
+
     </div>
   );
 }
