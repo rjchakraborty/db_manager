@@ -6,7 +6,6 @@ import {
   DatabaseColumn,
   QueryResult,
 } from "@/types/database";
-import net from "net";
 
 // Singleton Pool Manager
 class DatabasePoolManager {
@@ -79,16 +78,6 @@ class DatabasePoolManager {
   async createPool(connection: DatabaseConnection): Promise<Pool> {
     const connectionId = connection.id;
 
-    // Debug logging
-    console.log("🔧 Creating pool with config:", {
-      connectionId,
-      host: connection.host,
-      port: connection.port,
-      database: connection.database,
-      requiresTunnel: connection.requiresTunnel,
-      ssl: connection.ssl,
-    });
-
     // Store config first
     this.configs.set(connectionId, connection);
 
@@ -102,29 +91,19 @@ class DatabasePoolManager {
       ? "localhost"
       : connection.host;
 
-    // Force SSL for tunnel connections (RDS requires SSL even through SSH tunnel)
-    // This matches the behavior of migration scripts which use sslmode=require
-    const effectiveSSL = connection.requiresTunnel
-      ? {
-          rejectUnauthorized: false,
-          // Support for RDS and other cloud providers
-          checkServerIdentity: () => undefined,
-        }
-      : connection.ssl
-      ? {
-          rejectUnauthorized: false,
-          // Support for RDS and other cloud providers
-          checkServerIdentity: () => undefined,
-        }
-      : false;
-
     const pool = new Pool({
       host: effectiveHost,
       port: connection.port,
       database: connection.database,
       user: connection.username,
       password: connection.password,
-      ssl: effectiveSSL,
+      ssl: connection.ssl
+        ? {
+            rejectUnauthorized: false,
+            // Support for RDS and other cloud providers
+            checkServerIdentity: () => undefined,
+          }
+        : false,
 
       // Optimized pool settings for stability
       max: 3, // Smaller pool size for better resource management
@@ -170,51 +149,32 @@ class DatabasePoolManager {
       });
     });
 
-    // Dynamic tunnel verification and timeout calculation
-    let tunnelWaitTime = 0;
+    // Test the connection with increased timeout for tunnel connections
+    const connectionTimeout = connection.requiresTunnel ? 30000 : 15000;
+    const queryTimeout = connection.requiresTunnel ? 20000 : 10000;
+
+    // If tunnel is required, verify tunnel is actually forwarding connections
     if (connection.requiresTunnel) {
-      const tunnelStartTime = Date.now();
       console.log(
-        `⏳ Waiting for tunnel to be ready before database connection...`
+        `⏳ Verifying tunnel connection before database connection...`
       );
-      const tunnelReady = await waitForTunnelReady(
+      const tunnelReady = await verifyTunnelConnection(
         effectiveHost,
         connection.port
       );
-      tunnelWaitTime = Date.now() - tunnelStartTime;
-
       if (!tunnelReady) {
         throw new Error(
-          `Tunnel connection not available after ${tunnelWaitTime}ms. ` +
-            `Please ensure the SSH tunnel is properly established and forwarding to localhost:${connection.port}`
+          "Tunnel connection verification failed. Please ensure the SSH tunnel is properly established and forwarding to localhost:" +
+            connection.port
         );
       }
     }
-
-    // Calculate dynamic timeouts based on connection type and tunnel wait time
-    const connectionTimeout = calculateDynamicTimeout(
-      connection.requiresTunnel ?? false,
-      "connection",
-      tunnelWaitTime
-    );
-    const queryTimeout = calculateDynamicTimeout(
-      connection.requiresTunnel ?? false,
-      "query",
-      tunnelWaitTime
-    );
-
-    console.log(
-      `⏱️ Using timeouts - connection: ${connectionTimeout}ms, query: ${queryTimeout}ms`
-    );
 
     const client = await Promise.race([
       pool.connect(),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () =>
-            reject(
-              new Error(`Connection timeout after ${connectionTimeout}ms`)
-            ),
+          () => reject(new Error("Connection timeout")),
           connectionTimeout
         )
       ),
@@ -223,10 +183,7 @@ class DatabasePoolManager {
     await Promise.race([
       client.query("SELECT 1"),
       new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Query timeout after ${queryTimeout}ms`)),
-          queryTimeout
-        )
+        setTimeout(() => reject(new Error("Query timeout")), queryTimeout)
       ),
     ]);
 
@@ -407,54 +364,18 @@ class DatabasePoolManager {
 // Global instance
 const poolManager = DatabasePoolManager.getInstance();
 
-// Dynamic timeout configuration based on connection type
-const TIMEOUT_CONFIG = {
-  direct: {
-    connection: 15000,
-    query: 10000,
-    pool: 10000,
-  },
-  tunnel: {
-    // Base timeouts for tunnel connections
-    base: {
-      connection: 20000,
-      query: 15000,
-      pool: 15000,
-    },
-    // Per-attempt timeout for tunnel verification
-    verifyAttempt: 2000,
-    // Maximum time to wait for tunnel to become available
-    maxWaitTime: 30000,
-    // Polling interval for tunnel checks
-    pollInterval: 1000,
-  },
-};
-
-/**
- * Dynamically waits for tunnel to be ready with polling mechanism
- * Similar to the pattern in run_migration.sh (lines 71-82)
- */
-async function waitForTunnelReady(
+// Helper function to verify tunnel is actually forwarding connections
+async function verifyTunnelConnection(
   host: string,
-  port: number
+  port: number,
+  maxRetries: number = 3
 ): Promise<boolean> {
-  const startTime = Date.now();
-  const maxWaitTime = TIMEOUT_CONFIG.tunnel.maxWaitTime;
-  const pollInterval = TIMEOUT_CONFIG.tunnel.pollInterval;
+  const net = require("net");
 
-  let attempt = 0;
-  console.log(`⏳ Waiting for tunnel to be ready at ${host}:${port}...`);
-
-  while (Date.now() - startTime < maxWaitTime) {
-    attempt++;
-
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const isConnectable = await new Promise<boolean>((resolve) => {
-        const socket = net.createConnection({
-          host,
-          port,
-          timeout: TIMEOUT_CONFIG.tunnel.verifyAttempt,
-        });
+        const socket = net.createConnection({ host, port, timeout: 2000 });
 
         socket.on("connect", () => {
           socket.destroy();
@@ -473,47 +394,23 @@ async function waitForTunnelReady(
       });
 
       if (isConnectable) {
-        const elapsedTime = Date.now() - startTime;
-        console.log(
-          `✅ Tunnel ready after ${elapsedTime}ms (${attempt} attempts)`
-        );
-        // Give tunnel a bit more time to stabilize (similar to run_migration.sh line 76)
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        console.log(`✅ Tunnel connection verified on attempt ${attempt}`);
         return true;
       }
-    } catch {
-      // Continue polling - error is expected when connection is not ready
+    } catch (error) {
+      console.log(`⚠️ Tunnel verification attempt ${attempt} failed`);
     }
 
-    // Wait before next poll
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    // Wait before retry (exponential backoff)
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
   }
 
-  const elapsedTime = Date.now() - startTime;
   console.error(
-    `❌ Tunnel not ready after ${elapsedTime}ms (${attempt} attempts)`
+    `❌ Failed to verify tunnel connection after ${maxRetries} attempts`
   );
   return false;
-}
-
-/**
- * Calculate dynamic timeout based on connection type and elapsed wait time
- */
-function calculateDynamicTimeout(
-  requiresTunnel: boolean,
-  timeoutType: "connection" | "query" | "pool",
-  tunnelWaitTime: number = 0
-): number {
-  if (!requiresTunnel) {
-    return TIMEOUT_CONFIG.direct[timeoutType];
-  }
-
-  // For tunnel connections, adjust timeout based on how long we waited for tunnel
-  // If tunnel took a while to establish, reduce the timeout slightly to fail faster
-  const baseTimeout = TIMEOUT_CONFIG.tunnel.base[timeoutType];
-  const adjustment = Math.min(tunnelWaitTime * 0.3, baseTimeout * 0.3); // Max 30% reduction
-
-  return Math.max(baseTimeout - adjustment, baseTimeout * 0.5); // Never go below 50% of base
 }
 
 export class DatabaseService {
@@ -529,63 +426,27 @@ export class DatabaseService {
         ? "localhost"
         : connection.host;
 
-      // Dynamic tunnel verification and timeout calculation
-      let tunnelWaitTime = 0;
+      // If tunnel is required, verify tunnel is actually forwarding connections
       if (connection.requiresTunnel) {
-        const tunnelStartTime = Date.now();
         console.log(
-          `⏳ Waiting for tunnel to be ready before testing database connection...`
+          `⏳ Verifying tunnel connection before testing database connection...`
         );
-        const tunnelReady = await waitForTunnelReady(
+        const tunnelReady = await verifyTunnelConnection(
           effectiveHost,
           connection.port
         );
-        tunnelWaitTime = Date.now() - tunnelStartTime;
-
         if (!tunnelReady) {
           throw new Error(
-            `Tunnel connection not available after ${tunnelWaitTime}ms. ` +
-              `Please ensure the SSH tunnel is properly established and forwarding to localhost:${connection.port}`
+            "Tunnel connection verification failed. Please ensure the SSH tunnel is properly established and forwarding to localhost:" +
+              connection.port
           );
         }
       }
 
-      // Calculate dynamic timeouts based on connection type and tunnel wait time
-      const poolTimeout = calculateDynamicTimeout(
-        connection.requiresTunnel ?? false,
-        "pool",
-        tunnelWaitTime
-      );
-      const connectTimeout = calculateDynamicTimeout(
-        connection.requiresTunnel ?? false,
-        "connection",
-        tunnelWaitTime
-      );
-      const queryTimeout = calculateDynamicTimeout(
-        connection.requiresTunnel ?? false,
-        "query",
-        tunnelWaitTime
-      );
-
-      console.log(
-        `⏱️ Using timeouts - pool: ${poolTimeout}ms, connection: ${connectTimeout}ms, query: ${queryTimeout}ms`
-      );
-
-      // Force SSL for tunnel connections (RDS requires SSL even through SSH tunnel)
-      // This matches the behavior of migration scripts which use sslmode=require
-      const effectiveSSL = connection.requiresTunnel
-        ? {
-            rejectUnauthorized: false,
-            // Support for RDS and other cloud providers
-            checkServerIdentity: () => undefined,
-          }
-        : connection.ssl
-        ? {
-            rejectUnauthorized: false,
-            // Support for RDS and other cloud providers
-            checkServerIdentity: () => undefined,
-          }
-        : false;
+      // Adjust timeouts for tunnel connections
+      const poolTimeout = connection.requiresTunnel ? 20000 : 10000;
+      const connectTimeout = connection.requiresTunnel ? 18000 : 8000;
+      const queryTimeout = connection.requiresTunnel ? 15000 : 5000;
 
       // Create a temporary pool just for testing
       testPool = new Pool({
@@ -594,7 +455,13 @@ export class DatabaseService {
         database: connection.database,
         user: connection.username,
         password: connection.password,
-        ssl: effectiveSSL,
+        ssl: connection.ssl
+          ? {
+              rejectUnauthorized: false,
+              // Support for RDS and other cloud providers
+              checkServerIdentity: () => undefined,
+            }
+          : false,
         connectionTimeoutMillis: poolTimeout,
         idleTimeoutMillis: 5000,
         max: 1, // Single connection for testing
