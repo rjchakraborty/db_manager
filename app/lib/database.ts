@@ -6,6 +6,7 @@ import {
   DatabaseColumn,
   QueryResult,
 } from "@/types/database";
+import net from "net";
 
 // Singleton Pool Manager
 class DatabasePoolManager {
@@ -437,7 +438,6 @@ async function waitForTunnelReady(
   host: string,
   port: number
 ): Promise<boolean> {
-  const net = require("net");
   const startTime = Date.now();
   const maxWaitTime = TIMEOUT_CONFIG.tunnel.maxWaitTime;
   const pollInterval = TIMEOUT_CONFIG.tunnel.pollInterval;
@@ -481,8 +481,8 @@ async function waitForTunnelReady(
         await new Promise((resolve) => setTimeout(resolve, 1000));
         return true;
       }
-    } catch (error) {
-      // Continue polling
+    } catch {
+      // Continue polling - error is expected when connection is not ready
     }
 
     // Wait before next poll

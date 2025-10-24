@@ -90,40 +90,44 @@ export default function SettingsModal({
   const [useConnectionUrl, setUseConnectionUrl] = useState(false);
   const [connectionUrl, setConnectionUrl] = useState("");
   const [urlParseError, setUrlParseError] = useState<string | null>(null);
-  const [schemaCacheStatus, setSchemaCacheStatus] = useState<Map<string, boolean>>(new Map());
+  const [schemaCacheStatus, setSchemaCacheStatus] = useState<
+    Map<string, boolean>
+  >(new Map());
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [tunnelStatuses, setTunnelStatuses] = useState<Map<string, TunnelStatus>>(new Map());
+  const [tunnelStatuses, setTunnelStatuses] = useState<
+    Map<string, TunnelStatus>
+  >(new Map());
   const [startingTunnel, setStartingTunnel] = useState<string | null>(null);
-  const [showTunnelConfig, setShowTunnelConfig] = useState(false);
-  const [editingTunnel, setEditingTunnel] = useState<TunnelConfig | null>(null);
+  // Tunnel config states - unused for now but may be needed for future features
+  // const [showTunnelConfig, setShowTunnelConfig] = useState(false);
+  // const [editingTunnel, setEditingTunnel] = useState<TunnelConfig | null>(null);
   const [tunnelConfig, setTunnelConfig] = useState<TunnelConfig | null>(null);
-
-
 
   const checkSchemaCacheStatus = useCallback(() => {
     try {
-      const cached = localStorage.getItem('db-schema-cache');
+      const cached = localStorage.getItem("db-schema-cache");
       if (cached) {
         const parsedCache = JSON.parse(cached);
         const statusMap = new Map();
 
-        connections.forEach(conn => {
-          const hasCache = parsedCache[conn.id] &&
-            (Date.now() - parsedCache[conn.id].timestamp < 24 * 60 * 60 * 1000);
+        connections.forEach((conn) => {
+          const hasCache =
+            parsedCache[conn.id] &&
+            Date.now() - parsedCache[conn.id].timestamp < 24 * 60 * 60 * 1000;
           statusMap.set(conn.id, hasCache);
         });
 
         setSchemaCacheStatus(statusMap);
       }
     } catch (error) {
-      console.error('Error checking schema cache status:', error);
+      console.error("Error checking schema cache status:", error);
     }
   }, [connections]);
 
   const loadTunnelStatuses = useCallback(async () => {
     try {
-      const response = await fetch('/api/tunnel/status');
+      const response = await fetch("/api/tunnel/status");
       const result = await response.json();
       if (result.success && result.statuses) {
         const statusMap = new Map<string, TunnelStatus>();
@@ -133,19 +137,19 @@ export default function SettingsModal({
         setTunnelStatuses(statusMap);
       }
     } catch (error) {
-      console.error('Error loading tunnel statuses:', error);
+      console.error("Error loading tunnel statuses:", error);
     }
   }, []);
 
   const loadTunnelConfig = useCallback(async () => {
     try {
-      const response = await fetch('/api/tunnel/config');
+      const response = await fetch("/api/tunnel/config");
       const result = await response.json();
       if (result.success && result.config) {
         setTunnelConfig(result.config);
       }
     } catch (error) {
-      console.error('Error loading tunnel config:', error);
+      console.error("Error loading tunnel config:", error);
     }
   }, []);
 
@@ -233,11 +237,17 @@ export default function SettingsModal({
       // Store API key in plain localStorage for reliability (it's already a user-provided secret)
       if (typeof window !== "undefined" && window.localStorage) {
         localStorage.setItem(GEMINI_API_KEY_STORAGE, keyToSave.trim());
-        console.log('API key saved to localStorage:', keyToSave.substring(0, 10) + '...');
+        console.log(
+          "API key saved to localStorage:",
+          keyToSave.substring(0, 10) + "..."
+        );
 
         // Immediate verification
         const verification = localStorage.getItem(GEMINI_API_KEY_STORAGE);
-        console.log('Immediate verification - API key retrieved:', verification ? 'Success' : 'Failed');
+        console.log(
+          "Immediate verification - API key retrieved:",
+          verification ? "Success" : "Failed"
+        );
       }
       setShowApiKeyInput(false);
     }
@@ -247,8 +257,8 @@ export default function SettingsModal({
     setGeminiApiKey(value);
 
     // Auto-save if the value looks like a valid API key (starts with "AIza" and is reasonably long)
-    if (value.trim().startsWith('AIza') && value.trim().length > 30) {
-      console.log('Auto-saving API key on paste/input');
+    if (value.trim().startsWith("AIza") && value.trim().length > 30) {
+      console.log("Auto-saving API key on paste/input");
       saveGeminiApiKey(value);
     }
   };
@@ -265,16 +275,16 @@ export default function SettingsModal({
 
   const handleStartTunnel = async (tunnelId: string) => {
     if (!tunnelConfig) {
-      alert('Tunnel configuration not loaded');
+      alert("Tunnel configuration not loaded");
       return;
     }
 
     setStartingTunnel(tunnelId);
     try {
-      const response = await fetch('/api/tunnel/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tunnelConfig)
+      const response = await fetch("/api/tunnel/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tunnelConfig),
       });
 
       const result = await response.json();
@@ -284,8 +294,8 @@ export default function SettingsModal({
         alert(`Failed to start tunnel: ${result.error}`);
       }
     } catch (error) {
-      console.error('Error starting tunnel:', error);
-      alert('Failed to start tunnel');
+      console.error("Error starting tunnel:", error);
+      alert("Failed to start tunnel");
     } finally {
       setStartingTunnel(null);
     }
@@ -293,10 +303,10 @@ export default function SettingsModal({
 
   const handleStopTunnel = async (tunnelId: string) => {
     try {
-      const response = await fetch('/api/tunnel/stop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: tunnelId })
+      const response = await fetch("/api/tunnel/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: tunnelId }),
       });
 
       const result = await response.json();
@@ -306,45 +316,48 @@ export default function SettingsModal({
         alert(`Failed to stop tunnel: ${result.error}`);
       }
     } catch (error) {
-      console.error('Error stopping tunnel:', error);
-      alert('Failed to stop tunnel');
+      console.error("Error stopping tunnel:", error);
+      alert("Failed to stop tunnel");
     }
   };
 
-  const parseConnectionUrl = (url: string): Partial<DatabaseConnection> | null => {
+  const parseConnectionUrl = (
+    url: string
+  ): Partial<DatabaseConnection> | null => {
     try {
       // Validate URL format
-      if (!url.startsWith('postgresql://') && !url.startsWith('postgres://')) {
-        throw new Error('URL must start with postgresql:// or postgres://');
+      if (!url.startsWith("postgresql://") && !url.startsWith("postgres://")) {
+        throw new Error("URL must start with postgresql:// or postgres://");
       }
 
       const parsedUrl = new URL(url);
 
       if (!parsedUrl.hostname) {
-        throw new Error('Invalid hostname in URL');
+        throw new Error("Invalid hostname in URL");
       }
 
       if (!parsedUrl.username || !parsedUrl.password) {
-        throw new Error('Username and password are required in URL');
+        throw new Error("Username and password are required in URL");
       }
 
-      if (!parsedUrl.pathname || parsedUrl.pathname === '/') {
-        throw new Error('Database name is required in URL path');
+      if (!parsedUrl.pathname || parsedUrl.pathname === "/") {
+        throw new Error("Database name is required in URL path");
       }
 
       const database = parsedUrl.pathname.slice(1); // Remove leading slash
       const port = parsedUrl.port ? parseInt(parsedUrl.port) : 5432;
 
       // Check for SSL parameter - support more SSL modes
-      const sslMode = parsedUrl.searchParams.get('sslmode');
-      const sslParam = parsedUrl.searchParams.get('ssl');
+      const sslMode = parsedUrl.searchParams.get("sslmode");
+      const sslParam = parsedUrl.searchParams.get("ssl");
 
       // Enable SSL for: sslmode=require/prefer/allow, ssl=true, or if connecting to RDS
-      const ssl = sslMode === 'require' ||
-        sslMode === 'prefer' ||
-        sslMode === 'allow' ||
-        sslParam === 'true' ||
-        parsedUrl.hostname.includes('rds.amazonaws.com');
+      const ssl =
+        sslMode === "require" ||
+        sslMode === "prefer" ||
+        sslMode === "allow" ||
+        sslParam === "true" ||
+        parsedUrl.hostname.includes("rds.amazonaws.com");
 
       return {
         host: parsedUrl.hostname,
@@ -355,7 +368,10 @@ export default function SettingsModal({
         ssl: ssl,
       };
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Invalid connection URL format';
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Invalid connection URL format";
       setUrlParseError(errorMessage);
       return null;
     }
@@ -479,11 +495,17 @@ export default function SettingsModal({
     if (onConnectionSelect) {
       // Show connecting state
       setTestingConnection(true);
-      setTestResult({ success: true, message: "Connecting and loading schema..." });
+      setTestResult({
+        success: true,
+        message: "Connecting and loading schema...",
+      });
 
       try {
         await onConnectionSelect(connection);
-        setTestResult({ success: true, message: "Connected successfully! Schema cached for faster loading." });
+        setTestResult({
+          success: true,
+          message: "Connected successfully! Schema cached for faster loading.",
+        });
 
         // Small delay to show success message
         setTimeout(() => {
@@ -494,7 +516,7 @@ export default function SettingsModal({
       } catch (error: unknown) {
         setTestResult({
           success: false,
-          message: error instanceof Error ? error.message : "Failed to connect"
+          message: error instanceof Error ? error.message : "Failed to connect",
         });
         setTestingConnection(false);
       }
@@ -557,7 +579,7 @@ export default function SettingsModal({
         const success = await onConnectionTest(testConnection);
         setTestResult({
           success,
-          message: success ? "Connection successful!" : "Connection failed"
+          message: success ? "Connection successful!" : "Connection failed",
         });
       } else {
         // Fallback to direct API call
@@ -570,14 +592,17 @@ export default function SettingsModal({
         const result = await response.json();
         setTestResult({
           success: result.success,
-          message: result.success ? "Connection successful!" : (result.error || "Connection failed")
+          message: result.success
+            ? "Connection successful!"
+            : result.error || "Connection failed",
         });
       }
     } catch (error: unknown) {
       console.error("Test connection error:", error);
       setTestResult({
         success: false,
-        message: error instanceof Error ? error.message : "Failed to test connection"
+        message:
+          error instanceof Error ? error.message : "Failed to test connection",
       });
     } finally {
       setTestingConnection(false);
@@ -625,10 +650,11 @@ export default function SettingsModal({
             {connections.map((connection) => (
               <div
                 key={connection.id}
-                className={`p-4 border rounded-lg ${currentConnectionId === connection.id
-                  ? "border-black bg-gray-50"
-                  : "border-gray-200"
-                  }`}>
+                className={`p-4 border rounded-lg ${
+                  currentConnectionId === connection.id
+                    ? "border-black bg-gray-50"
+                    : "border-gray-200"
+                }`}>
                 <div className="flex items-center justify-between">
                   <div className="flex-1">
                     <div className="flex items-center">
@@ -717,19 +743,21 @@ export default function SettingsModal({
                   <button
                     type="button"
                     onClick={() => setUseConnectionUrl(false)}
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${!useConnectionUrl
-                      ? 'bg-black text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                      }`}>
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                      !useConnectionUrl
+                        ? "bg-black text-white"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}>
                     Manual Configuration
                   </button>
                   <button
                     type="button"
                     onClick={() => setUseConnectionUrl(true)}
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${useConnectionUrl
-                      ? 'bg-black text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                      }`}>
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                      useConnectionUrl
+                        ? "bg-black text-white"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}>
                     Connection URL
                   </button>
                 </div>
@@ -748,7 +776,9 @@ export default function SettingsModal({
                         className="font-mono text-sm"
                       />
                       {urlParseError && (
-                        <p className="mt-1 text-sm text-gray-900">{urlParseError}</p>
+                        <p className="mt-1 text-sm text-gray-900">
+                          {urlParseError}
+                        </p>
                       )}
                     </div>
                     <div className="text-xs text-gray-600 bg-gray-100 p-3 rounded">
@@ -764,10 +794,20 @@ export default function SettingsModal({
                           ✓ Connection URL parsed successfully:
                         </p>
                         <div className="text-xs text-gray-700 space-y-1">
-                          <div><strong>Host:</strong> {formData.host}:{formData.port}</div>
-                          <div><strong>Database:</strong> {formData.database}</div>
-                          <div><strong>Username:</strong> {formData.username}</div>
-                          <div><strong>SSL:</strong> {formData.ssl ? 'Enabled' : 'Disabled'}</div>
+                          <div>
+                            <strong>Host:</strong> {formData.host}:
+                            {formData.port}
+                          </div>
+                          <div>
+                            <strong>Database:</strong> {formData.database}
+                          </div>
+                          <div>
+                            <strong>Username:</strong> {formData.username}
+                          </div>
+                          <div>
+                            <strong>SSL:</strong>{" "}
+                            {formData.ssl ? "Enabled" : "Disabled"}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -834,7 +874,10 @@ export default function SettingsModal({
                           type="text"
                           value={formData.database || ""}
                           onChange={(e) =>
-                            setFormData({ ...formData, database: e.target.value })
+                            setFormData({
+                              ...formData,
+                              database: e.target.value,
+                            })
                           }
                           placeholder="mydb"
                           required
@@ -849,7 +892,10 @@ export default function SettingsModal({
                           type="text"
                           value={formData.username || ""}
                           onChange={(e) =>
-                            setFormData({ ...formData, username: e.target.value })
+                            setFormData({
+                              ...formData,
+                              username: e.target.value,
+                            })
                           }
                           placeholder="username"
                           required
@@ -865,7 +911,10 @@ export default function SettingsModal({
                             type={showPassword ? "text" : "password"}
                             value={formData.password || ""}
                             onChange={(e) =>
-                              setFormData({ ...formData, password: e.target.value })
+                              setFormData({
+                                ...formData,
+                                password: e.target.value,
+                              })
                             }
                             placeholder="password"
                             required
@@ -904,10 +953,11 @@ export default function SettingsModal({
                 {/* Test Result */}
                 {testResult && (
                   <div
-                    className={`p-3 rounded text-sm ${testResult.success
-                      ? "bg-gray-100 text-gray-900 border border-gray-200"
-                      : "bg-gray-100 text-gray-900 border border-gray-200"
-                      }`}>
+                    className={`p-3 rounded text-sm ${
+                      testResult.success
+                        ? "bg-gray-100 text-gray-900 border border-gray-200"
+                        : "bg-gray-100 text-gray-900 border border-gray-200"
+                    }`}>
                     {testResult.message}
                   </div>
                 )}
@@ -940,7 +990,9 @@ export default function SettingsModal({
           {/* RDS Tunnel Management Section */}
           <div className="mt-8 border-t border-gray-200 pt-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium text-black">RDS Tunnel Management</h3>
+              <h3 className="text-lg font-medium text-black">
+                RDS Tunnel Management
+              </h3>
               <Button
                 onClick={() => loadTunnelStatuses()}
                 size="sm"
@@ -960,33 +1012,43 @@ export default function SettingsModal({
                         <h4 className="font-medium text-black">
                           {tunnelConfig.name}
                         </h4>
-                        {tunnelStatuses.get('default-rds-tunnel')?.isActive ? (
+                        {tunnelStatuses.get("default-rds-tunnel")?.isActive ? (
                           <div className="flex items-center gap-1">
                             <Activity className="h-4 w-4 text-green-600" />
-                            <span className="text-xs text-green-600 font-medium">Active</span>
+                            <span className="text-xs text-green-600 font-medium">
+                              Active
+                            </span>
                           </div>
                         ) : (
                           <div className="flex items-center gap-1">
                             <WifiOff className="h-4 w-4 text-gray-400" />
-                            <span className="text-xs text-gray-500">Inactive</span>
+                            <span className="text-xs text-gray-500">
+                              Inactive
+                            </span>
                           </div>
                         )}
                       </div>
                       <div className="text-sm text-gray-600 mt-1">
                         <div>Local: localhost:{tunnelConfig.localPort}</div>
-                        <div>Remote: {tunnelConfig.remoteHost}:{tunnelConfig.remotePort}</div>
-                        <div>SSH: {tunnelConfig.sshUser}@{tunnelConfig.sshHost}</div>
+                        <div>
+                          Remote: {tunnelConfig.remoteHost}:
+                          {tunnelConfig.remotePort}
+                        </div>
+                        <div>
+                          SSH: {tunnelConfig.sshUser}@{tunnelConfig.sshHost}
+                        </div>
                       </div>
-                      {tunnelStatuses.get('default-rds-tunnel')?.error && (
+                      {tunnelStatuses.get("default-rds-tunnel")?.error && (
                         <div className="text-xs text-red-600 mt-2 p-2 bg-red-50 border border-red-200 rounded">
-                          Error: {tunnelStatuses.get('default-rds-tunnel')?.error}
+                          Error:{" "}
+                          {tunnelStatuses.get("default-rds-tunnel")?.error}
                         </div>
                       )}
                     </div>
                     <div className="flex items-center gap-2 ml-4">
-                      {tunnelStatuses.get('default-rds-tunnel')?.isActive ? (
+                      {tunnelStatuses.get("default-rds-tunnel")?.isActive ? (
                         <Button
-                          onClick={() => handleStopTunnel('default-rds-tunnel')}
+                          onClick={() => handleStopTunnel("default-rds-tunnel")}
                           size="sm"
                           variant="outline"
                           className="text-red-600 hover:text-red-700 border-red-200 hover:border-red-300">
@@ -995,20 +1057,27 @@ export default function SettingsModal({
                         </Button>
                       ) : (
                         <Button
-                          onClick={() => handleStartTunnel('default-rds-tunnel')}
+                          onClick={() =>
+                            handleStartTunnel("default-rds-tunnel")
+                          }
                           size="sm"
-                          disabled={startingTunnel === 'default-rds-tunnel'}
+                          disabled={startingTunnel === "default-rds-tunnel"}
                           className="bg-green-600 hover:bg-green-700 text-white">
                           <Wifi className="h-4 w-4 mr-1" />
-                          {startingTunnel === 'default-rds-tunnel' ? 'Starting...' : 'Start'}
+                          {startingTunnel === "default-rds-tunnel"
+                            ? "Starting..."
+                            : "Start"}
                         </Button>
                       )}
                     </div>
                   </div>
 
-                  {tunnelStatuses.get('default-rds-tunnel')?.startedAt && (
+                  {tunnelStatuses.get("default-rds-tunnel")?.startedAt && (
                     <div className="text-xs text-gray-500 mt-2">
-                      Started: {new Date(tunnelStatuses.get('default-rds-tunnel')!.startedAt!).toLocaleString()}
+                      Started:{" "}
+                      {new Date(
+                        tunnelStatuses.get("default-rds-tunnel")!.startedAt!
+                      ).toLocaleString()}
                     </div>
                   )}
                 </div>
@@ -1016,7 +1085,9 @@ export default function SettingsModal({
                 <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
                   <div className="flex items-center justify-center">
                     <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-                    <span className="text-sm text-gray-600">Loading tunnel configuration...</span>
+                    <span className="text-sm text-gray-600">
+                      Loading tunnel configuration...
+                    </span>
                   </div>
                 </div>
               )}
@@ -1025,10 +1096,13 @@ export default function SettingsModal({
                 <div className="flex items-start gap-2">
                   <Settings className="h-4 w-4 mt-0.5 text-blue-600" />
                   <div>
-                    <p className="font-medium text-blue-900 mb-1">About RDS Tunnels</p>
+                    <p className="font-medium text-blue-900 mb-1">
+                      About RDS Tunnels
+                    </p>
                     <p className="text-blue-800">
-                      RDS tunnels create secure SSH connections to access remote databases.
-                      Start the tunnel before connecting to databases that require it.
+                      RDS tunnels create secure SSH connections to access remote
+                      databases. Start the tunnel before connecting to databases
+                      that require it.
                     </p>
                   </div>
                 </div>
@@ -1039,7 +1113,9 @@ export default function SettingsModal({
           {/* AI Configuration Section */}
           <div className="mt-8 border-t border-gray-200 pt-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium text-black">AI Configuration</h3>
+              <h3 className="text-lg font-medium text-black">
+                AI Configuration
+              </h3>
               {geminiApiKey && !showApiKeyInput && (
                 <button
                   onClick={() => setShowApiKeyInput(true)}
@@ -1063,8 +1139,12 @@ export default function SettingsModal({
                       onPaste={(e) => {
                         // Handle paste event specifically
                         setTimeout(() => {
-                          const pastedValue = (e.target as HTMLInputElement).value;
-                          console.log('Paste detected, value length:', pastedValue.length);
+                          const pastedValue = (e.target as HTMLInputElement)
+                            .value;
+                          console.log(
+                            "Paste detected, value length:",
+                            pastedValue.length
+                          );
                           handleApiKeyChange(pastedValue);
                         }, 10);
                       }}
@@ -1079,7 +1159,8 @@ export default function SettingsModal({
                     </button>
                   </div>
                   <p className="text-xs text-gray-500 mt-1">
-                    Required for AI-powered SQL generation. Get your API key from{" "}
+                    Required for AI-powered SQL generation. Get your API key
+                    from{" "}
                     <a
                       href="https://makersuite.google.com/app/apikey"
                       target="_blank"
@@ -1094,7 +1175,9 @@ export default function SettingsModal({
               <div className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded">
                 <div className="flex items-center">
                   <div className="h-2 w-2 bg-black rounded-full mr-2"></div>
-                  <span className="text-sm text-gray-900">API Key configured</span>
+                  <span className="text-sm text-gray-900">
+                    API Key configured
+                  </span>
                 </div>
                 <button
                   onClick={clearGeminiApiKey}
