@@ -12,9 +12,15 @@ class DatabasePoolManager {
   private static instance: DatabasePoolManager;
   private pools = new Map<string, Pool>();
   private configs = new Map<string, DatabaseConnection>();
-  private health = new Map<string, { lastCheck: number; healthy: boolean; inUse: number }>();
+  private health = new Map<
+    string,
+    { lastCheck: number; healthy: boolean; inUse: number }
+  >();
   private recentlyCreated = new Map<string, number>();
-  private schemaCache = new Map<string, { ts: number; data: DatabaseSchema[] }>();
+  private schemaCache = new Map<
+    string,
+    { ts: number; data: DatabaseSchema[] }
+  >();
 
   // Configuration constants
   private readonly SCHEMA_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -53,8 +59,10 @@ class DatabasePoolManager {
     for (const [connectionId, healthInfo] of this.health.entries()) {
       const isIdle = healthInfo.inUse === 0;
       const isOld = now - healthInfo.lastCheck > this.MAX_IDLE_TIME_MS;
-      const isRecentlyCreated = this.recentlyCreated.has(connectionId) &&
-        (now - this.recentlyCreated.get(connectionId)!) < this.RECENT_CONNECTION_TTL_MS;
+      const isRecentlyCreated =
+        this.recentlyCreated.has(connectionId) &&
+        now - this.recentlyCreated.get(connectionId)! <
+          this.RECENT_CONNECTION_TTL_MS;
 
       if (isIdle && isOld && !isRecentlyCreated) {
         connectionsToClose.push(connectionId);
@@ -70,6 +78,16 @@ class DatabasePoolManager {
   async createPool(connection: DatabaseConnection): Promise<Pool> {
     const connectionId = connection.id;
 
+    // Debug logging
+    console.log("🔧 Creating pool with config:", {
+      connectionId,
+      host: connection.host,
+      port: connection.port,
+      database: connection.database,
+      requiresTunnel: connection.requiresTunnel,
+      ssl: connection.ssl,
+    });
+
     // Store config first
     this.configs.set(connectionId, connection);
 
@@ -78,13 +96,34 @@ class DatabasePoolManager {
       await this.closeConnection(connectionId, false);
     }
 
+    // Use localhost if tunnel is required, otherwise use the original host
+    const effectiveHost = connection.requiresTunnel
+      ? "localhost"
+      : connection.host;
+
+    // Force SSL for tunnel connections (RDS requires SSL even through SSH tunnel)
+    // This matches the behavior of migration scripts which use sslmode=require
+    const effectiveSSL = connection.requiresTunnel
+      ? {
+          rejectUnauthorized: false,
+          // Support for RDS and other cloud providers
+          checkServerIdentity: () => undefined,
+        }
+      : connection.ssl
+      ? {
+          rejectUnauthorized: false,
+          // Support for RDS and other cloud providers
+          checkServerIdentity: () => undefined,
+        }
+      : false;
+
     const pool = new Pool({
-      host: connection.host,
+      host: effectiveHost,
       port: connection.port,
       database: connection.database,
       user: connection.username,
       password: connection.password,
-      ssl: connection.ssl ? { rejectUnauthorized: false } : false,
+      ssl: effectiveSSL,
 
       // Optimized pool settings for stability
       max: 3, // Smaller pool size for better resource management
@@ -99,50 +138,95 @@ class DatabasePoolManager {
     });
 
     // Set up pool event handlers
-    pool.on('error', (err) => {
+    pool.on("error", (err) => {
       console.error(`Pool error for ${connectionId}:`, err);
       this.health.set(connectionId, {
         lastCheck: Date.now(),
         healthy: false,
-        inUse: this.health.get(connectionId)?.inUse || 0
+        inUse: this.health.get(connectionId)?.inUse || 0,
       });
     });
 
-    pool.on('connect', () => {
+    pool.on("connect", () => {
       console.log(`✅ Pool connected for ${connectionId}`);
     });
 
-    pool.on('acquire', () => {
+    pool.on("acquire", () => {
       const current = this.health.get(connectionId);
       this.health.set(connectionId, {
         lastCheck: Date.now(),
         healthy: current?.healthy ?? true,
-        inUse: (current?.inUse || 0) + 1
+        inUse: (current?.inUse || 0) + 1,
       });
     });
 
-    pool.on('release', () => {
+    pool.on("release", () => {
       const current = this.health.get(connectionId);
       this.health.set(connectionId, {
         lastCheck: Date.now(),
         healthy: current?.healthy ?? true,
-        inUse: Math.max(0, (current?.inUse || 1) - 1)
+        inUse: Math.max(0, (current?.inUse || 1) - 1),
       });
     });
 
-    // Test the connection
+    // Dynamic tunnel verification and timeout calculation
+    let tunnelWaitTime = 0;
+    if (connection.requiresTunnel) {
+      const tunnelStartTime = Date.now();
+      console.log(
+        `⏳ Waiting for tunnel to be ready before database connection...`
+      );
+      const tunnelReady = await waitForTunnelReady(
+        effectiveHost,
+        connection.port
+      );
+      tunnelWaitTime = Date.now() - tunnelStartTime;
+
+      if (!tunnelReady) {
+        throw new Error(
+          `Tunnel connection not available after ${tunnelWaitTime}ms. ` +
+            `Please ensure the SSH tunnel is properly established and forwarding to localhost:${connection.port}`
+        );
+      }
+    }
+
+    // Calculate dynamic timeouts based on connection type and tunnel wait time
+    const connectionTimeout = calculateDynamicTimeout(
+      connection.requiresTunnel ?? false,
+      "connection",
+      tunnelWaitTime
+    );
+    const queryTimeout = calculateDynamicTimeout(
+      connection.requiresTunnel ?? false,
+      "query",
+      tunnelWaitTime
+    );
+
+    console.log(
+      `⏱️ Using timeouts - connection: ${connectionTimeout}ms, query: ${queryTimeout}ms`
+    );
+
     const client = await Promise.race([
       pool.connect(),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Connection timeout')), 15000)
-      )
+        setTimeout(
+          () =>
+            reject(
+              new Error(`Connection timeout after ${connectionTimeout}ms`)
+            ),
+          connectionTimeout
+        )
+      ),
     ]);
 
     await Promise.race([
       client.query("SELECT 1"),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Query timeout')), 10000)
-      )
+        setTimeout(
+          () => reject(new Error(`Query timeout after ${queryTimeout}ms`)),
+          queryTimeout
+        )
+      ),
     ]);
 
     client.release();
@@ -153,7 +237,7 @@ class DatabasePoolManager {
     this.health.set(connectionId, {
       lastCheck: Date.now(),
       healthy: true,
-      inUse: 0
+      inUse: 0,
     });
 
     console.log(`✅ Pool created successfully for ${connectionId}`);
@@ -165,8 +249,10 @@ class DatabasePoolManager {
 
     if (pool) {
       const health = this.health.get(connectionId);
-      const isRecentlyCreated = this.recentlyCreated.has(connectionId) &&
-        (Date.now() - this.recentlyCreated.get(connectionId)!) < this.RECENT_CONNECTION_TTL_MS;
+      const isRecentlyCreated =
+        this.recentlyCreated.has(connectionId) &&
+        Date.now() - this.recentlyCreated.get(connectionId)! <
+          this.RECENT_CONNECTION_TTL_MS;
 
       // Skip health check for recently created connections
       if (isRecentlyCreated) {
@@ -174,8 +260,9 @@ class DatabasePoolManager {
       }
 
       // Check if we need a health check
-      const needsHealthCheck = !health ||
-        (Date.now() - health.lastCheck > this.HEALTH_CHECK_INTERVAL_MS) ||
+      const needsHealthCheck =
+        !health ||
+        Date.now() - health.lastCheck > this.HEALTH_CHECK_INTERVAL_MS ||
         !health.healthy;
 
       if (needsHealthCheck) {
@@ -189,7 +276,9 @@ class DatabasePoolManager {
     if (!pool) {
       const config = this.configs.get(connectionId);
       if (!config) {
-        throw new Error(`No configuration found for connection: ${connectionId}`);
+        throw new Error(
+          `No configuration found for connection: ${connectionId}`
+        );
       }
       pool = await this.createPool(config);
     }
@@ -197,20 +286,23 @@ class DatabasePoolManager {
     return pool;
   }
 
-  private async checkPoolHealth(connectionId: string, pool: Pool): Promise<boolean> {
+  private async checkPoolHealth(
+    connectionId: string,
+    pool: Pool
+  ): Promise<boolean> {
     try {
       const client = await Promise.race([
         pool.connect(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Health check timeout')), 5000)
-        )
+          setTimeout(() => reject(new Error("Health check timeout")), 5000)
+        ),
       ]);
 
       await Promise.race([
         client.query("SELECT 1"),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Health query timeout')), 3000)
-        )
+          setTimeout(() => reject(new Error("Health query timeout")), 3000)
+        ),
       ]);
 
       client.release();
@@ -220,18 +312,21 @@ class DatabasePoolManager {
       this.health.set(connectionId, {
         lastCheck: Date.now(),
         healthy: true,
-        inUse: current?.inUse || 0
+        inUse: current?.inUse || 0,
       });
 
       return true;
     } catch (error) {
-      console.log(`❌ Health check failed for ${connectionId}:`, error instanceof Error ? error.message : "Unknown error");
+      console.log(
+        `❌ Health check failed for ${connectionId}:`,
+        error instanceof Error ? error.message : "Unknown error"
+      );
 
       // Mark as unhealthy and close the pool
       this.health.set(connectionId, {
         lastCheck: Date.now(),
         healthy: false,
-        inUse: 0
+        inUse: 0,
       });
 
       await this.closeConnection(connectionId, false);
@@ -239,7 +334,10 @@ class DatabasePoolManager {
     }
   }
 
-  async closeConnection(connectionId: string, removeConfig: boolean = false): Promise<void> {
+  async closeConnection(
+    connectionId: string,
+    removeConfig: boolean = false
+  ): Promise<void> {
     const pool = this.pools.get(connectionId);
     if (pool) {
       try {
@@ -265,7 +363,7 @@ class DatabasePoolManager {
       this.cleanupTimer = null;
     }
 
-    const closePromises = Array.from(this.pools.keys()).map(id =>
+    const closePromises = Array.from(this.pools.keys()).map((id) =>
       this.closeConnection(id, true)
     );
 
@@ -274,7 +372,9 @@ class DatabasePoolManager {
   }
 
   // Schema cache methods
-  getCachedSchema(connectionId: string): { ts: number; data: DatabaseSchema[] } | null {
+  getCachedSchema(
+    connectionId: string
+  ): { ts: number; data: DatabaseSchema[] } | null {
     const cached = this.schemaCache.get(connectionId);
     if (!cached) return null;
 
@@ -290,7 +390,7 @@ class DatabasePoolManager {
   setCachedSchema(connectionId: string, data: DatabaseSchema[]): void {
     this.schemaCache.set(connectionId, {
       ts: Date.now(),
-      data
+      data,
     });
   }
 
@@ -306,6 +406,116 @@ class DatabasePoolManager {
 // Global instance
 const poolManager = DatabasePoolManager.getInstance();
 
+// Dynamic timeout configuration based on connection type
+const TIMEOUT_CONFIG = {
+  direct: {
+    connection: 15000,
+    query: 10000,
+    pool: 10000,
+  },
+  tunnel: {
+    // Base timeouts for tunnel connections
+    base: {
+      connection: 20000,
+      query: 15000,
+      pool: 15000,
+    },
+    // Per-attempt timeout for tunnel verification
+    verifyAttempt: 2000,
+    // Maximum time to wait for tunnel to become available
+    maxWaitTime: 30000,
+    // Polling interval for tunnel checks
+    pollInterval: 1000,
+  },
+};
+
+/**
+ * Dynamically waits for tunnel to be ready with polling mechanism
+ * Similar to the pattern in run_migration.sh (lines 71-82)
+ */
+async function waitForTunnelReady(
+  host: string,
+  port: number
+): Promise<boolean> {
+  const net = require("net");
+  const startTime = Date.now();
+  const maxWaitTime = TIMEOUT_CONFIG.tunnel.maxWaitTime;
+  const pollInterval = TIMEOUT_CONFIG.tunnel.pollInterval;
+
+  let attempt = 0;
+  console.log(`⏳ Waiting for tunnel to be ready at ${host}:${port}...`);
+
+  while (Date.now() - startTime < maxWaitTime) {
+    attempt++;
+
+    try {
+      const isConnectable = await new Promise<boolean>((resolve) => {
+        const socket = net.createConnection({
+          host,
+          port,
+          timeout: TIMEOUT_CONFIG.tunnel.verifyAttempt,
+        });
+
+        socket.on("connect", () => {
+          socket.destroy();
+          resolve(true);
+        });
+
+        socket.on("timeout", () => {
+          socket.destroy();
+          resolve(false);
+        });
+
+        socket.on("error", () => {
+          socket.destroy();
+          resolve(false);
+        });
+      });
+
+      if (isConnectable) {
+        const elapsedTime = Date.now() - startTime;
+        console.log(
+          `✅ Tunnel ready after ${elapsedTime}ms (${attempt} attempts)`
+        );
+        // Give tunnel a bit more time to stabilize (similar to run_migration.sh line 76)
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return true;
+      }
+    } catch (error) {
+      // Continue polling
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+
+  const elapsedTime = Date.now() - startTime;
+  console.error(
+    `❌ Tunnel not ready after ${elapsedTime}ms (${attempt} attempts)`
+  );
+  return false;
+}
+
+/**
+ * Calculate dynamic timeout based on connection type and elapsed wait time
+ */
+function calculateDynamicTimeout(
+  requiresTunnel: boolean,
+  timeoutType: "connection" | "query" | "pool",
+  tunnelWaitTime: number = 0
+): number {
+  if (!requiresTunnel) {
+    return TIMEOUT_CONFIG.direct[timeoutType];
+  }
+
+  // For tunnel connections, adjust timeout based on how long we waited for tunnel
+  // If tunnel took a while to establish, reduce the timeout slightly to fail faster
+  const baseTimeout = TIMEOUT_CONFIG.tunnel.base[timeoutType];
+  const adjustment = Math.min(tunnelWaitTime * 0.3, baseTimeout * 0.3); // Max 30% reduction
+
+  return Math.max(baseTimeout - adjustment, baseTimeout * 0.5); // Never go below 50% of base
+}
+
 export class DatabaseService {
   static async testConnection(
     connection: DatabaseConnection
@@ -314,15 +524,78 @@ export class DatabaseService {
     let client: PoolClient | null = null;
 
     try {
+      // Use localhost if tunnel is required, otherwise use the original host
+      const effectiveHost = connection.requiresTunnel
+        ? "localhost"
+        : connection.host;
+
+      // Dynamic tunnel verification and timeout calculation
+      let tunnelWaitTime = 0;
+      if (connection.requiresTunnel) {
+        const tunnelStartTime = Date.now();
+        console.log(
+          `⏳ Waiting for tunnel to be ready before testing database connection...`
+        );
+        const tunnelReady = await waitForTunnelReady(
+          effectiveHost,
+          connection.port
+        );
+        tunnelWaitTime = Date.now() - tunnelStartTime;
+
+        if (!tunnelReady) {
+          throw new Error(
+            `Tunnel connection not available after ${tunnelWaitTime}ms. ` +
+              `Please ensure the SSH tunnel is properly established and forwarding to localhost:${connection.port}`
+          );
+        }
+      }
+
+      // Calculate dynamic timeouts based on connection type and tunnel wait time
+      const poolTimeout = calculateDynamicTimeout(
+        connection.requiresTunnel ?? false,
+        "pool",
+        tunnelWaitTime
+      );
+      const connectTimeout = calculateDynamicTimeout(
+        connection.requiresTunnel ?? false,
+        "connection",
+        tunnelWaitTime
+      );
+      const queryTimeout = calculateDynamicTimeout(
+        connection.requiresTunnel ?? false,
+        "query",
+        tunnelWaitTime
+      );
+
+      console.log(
+        `⏱️ Using timeouts - pool: ${poolTimeout}ms, connection: ${connectTimeout}ms, query: ${queryTimeout}ms`
+      );
+
+      // Force SSL for tunnel connections (RDS requires SSL even through SSH tunnel)
+      // This matches the behavior of migration scripts which use sslmode=require
+      const effectiveSSL = connection.requiresTunnel
+        ? {
+            rejectUnauthorized: false,
+            // Support for RDS and other cloud providers
+            checkServerIdentity: () => undefined,
+          }
+        : connection.ssl
+        ? {
+            rejectUnauthorized: false,
+            // Support for RDS and other cloud providers
+            checkServerIdentity: () => undefined,
+          }
+        : false;
+
       // Create a temporary pool just for testing
       testPool = new Pool({
-        host: connection.host,
+        host: effectiveHost,
         port: connection.port,
         database: connection.database,
         user: connection.username,
         password: connection.password,
-        ssl: connection.ssl ? { rejectUnauthorized: false } : false,
-        connectionTimeoutMillis: 10000,
+        ssl: effectiveSSL,
+        connectionTimeoutMillis: poolTimeout,
         idleTimeoutMillis: 5000,
         max: 1, // Single connection for testing
       });
@@ -330,15 +603,18 @@ export class DatabaseService {
       client = await Promise.race([
         testPool.connect(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timeout')), 8000)
-        )
+          setTimeout(
+            () => reject(new Error("Connection timeout")),
+            connectTimeout
+          )
+        ),
       ]);
 
       await Promise.race([
         client.query("SELECT 1"),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Query timeout')), 5000)
-        )
+          setTimeout(() => reject(new Error("Query timeout")), queryTimeout)
+        ),
       ]);
 
       client.release();
@@ -388,7 +664,10 @@ export class DatabaseService {
     return await poolManager.createPool(connection);
   }
 
-  static async closeConnection(connectionId: string, removeConfig: boolean = false): Promise<void> {
+  static async closeConnection(
+    connectionId: string,
+    removeConfig: boolean = false
+  ): Promise<void> {
     await poolManager.closeConnection(connectionId, removeConfig);
   }
 
@@ -401,8 +680,12 @@ export class DatabaseService {
         return await poolManager.getPool(connectionId);
       } catch (error: unknown) {
         retryCount++;
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        console.error(`Connection attempt ${retryCount} failed for ${connectionId}:`, errorMessage);
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        console.error(
+          `Connection attempt ${retryCount} failed for ${connectionId}:`,
+          errorMessage
+        );
 
         if (retryCount >= maxRetries) {
           throw new Error(
@@ -411,13 +694,14 @@ export class DatabaseService {
         }
 
         // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.pow(2, retryCount) * 1000)
+        );
       }
     }
 
     throw new Error("Unexpected error in connection retry loop");
   }
-
 
   static async executeQuery(
     connectionId: string,
@@ -444,9 +728,20 @@ export class DatabaseService {
         duration,
       };
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Query execution failed";
-      console.error(`Query execution failed for connection ${connectionId}:`, errorMessage);
-      const pgError = error as { code?: string; detail?: string; hint?: string; position?: string; line?: number; column?: number };
+      const errorMessage =
+        error instanceof Error ? error.message : "Query execution failed";
+      console.error(
+        `Query execution failed for connection ${connectionId}:`,
+        errorMessage
+      );
+      const pgError = error as {
+        code?: string;
+        detail?: string;
+        hint?: string;
+        position?: string;
+        line?: number;
+        column?: number;
+      };
       throw {
         message: errorMessage,
         code: pgError.code || "UNKNOWN",
@@ -468,14 +763,15 @@ export class DatabaseService {
     `;
 
     const result = await this.executeQuery(connectionId, query);
-    return result.rows.map((row) => (row as { schema_name: string }).schema_name);
+    return result.rows.map(
+      (row) => (row as { schema_name: string }).schema_name
+    );
   }
 
   static async getTables(
     connectionId: string,
     schemaName: string
   ): Promise<DatabaseTable[]> {
-
     // Get all tables first
     const tablesQuery = `
       SELECT 
@@ -510,7 +806,10 @@ export class DatabaseService {
         SELECT ku.table_name, ku.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage ku ON tc.constraint_name = ku.constraint_name
-        WHERE tc.table_schema = '${schemaName.replace(/'/g, "''")}' AND tc.constraint_type = 'PRIMARY KEY'
+        WHERE tc.table_schema = '${schemaName.replace(
+          /'/g,
+          "''"
+        )}' AND tc.constraint_type = 'PRIMARY KEY'
       ) pk ON c.table_name = pk.table_name AND c.column_name = pk.column_name
       LEFT JOIN (
         SELECT 
@@ -521,7 +820,10 @@ export class DatabaseService {
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage ku ON tc.constraint_name = ku.constraint_name
         JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
-        WHERE tc.table_schema = '${schemaName.replace(/'/g, "''")}' AND tc.constraint_type = 'FOREIGN KEY'
+        WHERE tc.table_schema = '${schemaName.replace(
+          /'/g,
+          "''"
+        )}' AND tc.constraint_type = 'FOREIGN KEY'
       ) fk ON c.table_name = fk.table_name AND c.column_name = fk.column_name
       WHERE c.table_schema = '${schemaName.replace(/'/g, "''")}'
       ORDER BY c.table_name, c.ordinal_position;
@@ -532,7 +834,19 @@ export class DatabaseService {
     // Group columns by table name
     const columnsByTable = new Map<string, DatabaseColumn[]>();
     for (const row of columnsResult.rows) {
-      const typedRow = row as { table_name: string; column_name: string; data_type: string; is_nullable: boolean | string; column_default: string | null; character_maximum_length: number | null; ordinal_position: number; is_primary_key: boolean; is_foreign_key: boolean; foreign_key_table: string | null; foreign_key_column: string | null };
+      const typedRow = row as {
+        table_name: string;
+        column_name: string;
+        data_type: string;
+        is_nullable: boolean | string;
+        column_default: string | null;
+        character_maximum_length: number | null;
+        ordinal_position: number;
+        is_primary_key: boolean;
+        is_foreign_key: boolean;
+        foreign_key_table: string | null;
+        foreign_key_column: string | null;
+      };
       const tableName = typedRow.table_name;
       if (!columnsByTable.has(tableName)) {
         columnsByTable.set(tableName, []);
@@ -540,7 +854,8 @@ export class DatabaseService {
       columnsByTable.get(tableName)!.push({
         column_name: typedRow.column_name,
         data_type: typedRow.data_type,
-        is_nullable: typedRow.is_nullable === true || typedRow.is_nullable === 'YES',
+        is_nullable:
+          typedRow.is_nullable === true || typedRow.is_nullable === "YES",
         column_default: typedRow.column_default,
         character_maximum_length: typedRow.character_maximum_length,
         ordinal_position: Number(typedRow.ordinal_position) || 0,
@@ -554,7 +869,11 @@ export class DatabaseService {
     // Build final tables array
     const tables: DatabaseTable[] = [];
     for (const row of tablesResult.rows) {
-      const typedTableRow = row as { table_name: string; table_schema: string; row_count: string };
+      const typedTableRow = row as {
+        table_name: string;
+        table_schema: string;
+        row_count: string;
+      };
       const columns = columnsByTable.get(typedTableRow.table_name) || [];
       tables.push({
         table_name: typedTableRow.table_name,
@@ -626,7 +945,8 @@ export class DatabaseService {
       return {
         column_name: typedRow.column_name,
         data_type: typedRow.data_type,
-        is_nullable: typedRow.is_nullable === true || typedRow.is_nullable === 'YES',
+        is_nullable:
+          typedRow.is_nullable === true || typedRow.is_nullable === "YES",
         column_default: typedRow.column_default,
         character_maximum_length: typedRow.character_maximum_length,
         ordinal_position: Number(typedRow.ordinal_position) || 0,
@@ -638,9 +958,7 @@ export class DatabaseService {
     });
   }
 
-  static async getFullSchema(
-    connectionId: string
-  ): Promise<DatabaseSchema[]> {
+  static async getFullSchema(connectionId: string): Promise<DatabaseSchema[]> {
     // Check cache first using pool manager
     const cached = poolManager.getCachedSchema(connectionId);
     if (cached) {

@@ -18,7 +18,9 @@ export const isGeminiInitialized = (): boolean => {
   return genAI !== null;
 };
 
-const generateDatabaseContext = (context: { tables: DatabaseTable[] | Record<string, unknown>[] }): string => {
+const generateDatabaseContext = (context: {
+  tables: DatabaseTable[] | Record<string, unknown>[];
+}): string => {
   if (!context || !context.tables || context.tables.length === 0) {
     return "No table information available.";
   }
@@ -29,8 +31,10 @@ const generateDatabaseContext = (context: { tables: DatabaseTable[] | Record<str
   return tables
     .map((table: DatabaseTable | Record<string, unknown>) => {
       // Handle enhanced table format from EnhancedAIAssistant
-      if ('name' in table && 'columns' in table) {
-        const columns = (table as { columns: Record<string, unknown>[] }).columns
+      if ("name" in table && "columns" in table) {
+        const columns = (
+          table as { columns: Record<string, unknown>[] }
+        ).columns
           .map((col: Record<string, unknown>) => {
             let colInfo = `${col.name} (${col.type}`;
             if (col.primaryKey) colInfo += ", PRIMARY KEY";
@@ -41,8 +45,9 @@ const generateDatabaseContext = (context: { tables: DatabaseTable[] | Record<str
           })
           .join(", ");
 
-        let tableInfo = `Table: ${table.fullTableName || table.schema + '."' + table.name + '"'
-          }\nColumns: ${columns}`;
+        let tableInfo = `Table: ${
+          table.fullTableName || table.schema + '."' + table.name + '"'
+        }\nColumns: ${columns}`;
         if (table.columnList) {
           tableInfo += `\nAvailable column names: ${table.columnList}`;
         }
@@ -93,16 +98,18 @@ Database Context:
 ${databaseContext}
 
 Current Schema: ${currentSchema}
-${availableTables.length > 0
-        ? `Available Tables: ${availableTables.join(", ")}`
-        : ""
-      }
-${request.context?.tableNames
-        ? `Table Names (use exactly as shown): ${request.context.tableNames.join(
-          ", "
-        )}`
-        : ""
-      }
+${
+  availableTables.length > 0
+    ? `Available Tables: ${availableTables.join(", ")}`
+    : ""
+}
+${
+  request.context?.tableNames
+    ? `Table Names (use exactly as shown): ${request.context.tableNames.join(
+        ", "
+      )}`
+    : ""
+}
 
 Natural Language Query: "${request.naturalLanguage}"
 
@@ -116,6 +123,13 @@ CRITICAL RULES:
 7. Respect data types and use proper PostgreSQL functions for time/date.
 8. Use explicit JOIN ... ON with provided column names only.
 9. If exact mapping is not possible, return the closest valid SQL and list gaps in suggestions.
+
+DATA TYPE HANDLING (CRITICAL):
+- When comparing text columns with dates/timestamps, use explicit casting: column_name::timestamp or CAST(column_name AS timestamp)
+- For date comparisons, use: column_name >= '2024-01-01'::timestamp or column_name >= TIMESTAMP '2024-01-01'
+- Never compare text directly with timestamp - always cast appropriately
+- Pay attention to column data types in the context above
+- Use TO_TIMESTAMP() or TO_DATE() functions when needed for string to date conversion
 
 IMPORTANT: If you cannot find the exact column mentioned in the query, DO NOT make one up. Instead, suggest using available columns or explain why the query cannot be fulfilled.
 
@@ -179,10 +193,9 @@ Important: Only return the JSON object, no additional text.
   } catch (error: unknown) {
     console.error("Gemini API error:", error);
 
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    throw new Error(
-      `AI query conversion failed: ${errorMessage}`
-    );
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    throw new Error(`AI query conversion failed: ${errorMessage}`);
   }
 };
 
@@ -222,7 +235,8 @@ Keep the explanation user-friendly for non-technical users.
     return response.text();
   } catch (error: unknown) {
     console.error("SQL explanation error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     return `Failed to explain SQL query: ${errorMessage}`;
   }
 };
@@ -281,9 +295,8 @@ Only return the JSON array, no additional text.
     ];
   } catch (error: unknown) {
     console.error("Query improvement suggestions error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return [
-      `Failed to generate suggestions: ${errorMessage}`,
-    ];
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    return [`Failed to generate suggestions: ${errorMessage}`];
   }
 };

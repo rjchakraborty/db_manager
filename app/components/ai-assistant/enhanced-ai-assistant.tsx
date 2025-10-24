@@ -50,16 +50,12 @@ export default function EnhancedAIAssistant({
     }
   }, [connectionId]);
 
-
-
   // Load favorites when component mounts or connection changes
   useEffect(() => {
     if (connectionId) {
       loadFavorites();
     }
   }, [connectionId, loadFavorites]);
-
-
 
   const generateAISuggestions = async () => {
     if (!connectionId || !fullSchema || fullSchema.length === 0) return;
@@ -78,7 +74,9 @@ export default function EnhancedAIAssistant({
       }
 
       if (!storedApiKey) {
-        setError("Please configure your Gemini API key in Settings to use AI suggestions");
+        setError(
+          "Please configure your Gemini API key in Settings to use AI suggestions"
+        );
         return;
       }
 
@@ -89,7 +87,7 @@ export default function EnhancedAIAssistant({
           connectionId,
           fullSchema,
           apiKey: storedApiKey,
-          selectedTable
+          selectedTable,
         }),
       });
 
@@ -99,9 +97,13 @@ export default function EnhancedAIAssistant({
         setUseAISuggestions(true);
         setError(null);
       } else {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to generate AI suggestions' }));
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to generate AI suggestions" }));
         if (response.status === 503) {
-          setError("AI service is currently overloaded. Using smart suggestions instead.");
+          setError(
+            "AI service is currently overloaded. Using smart suggestions instead."
+          );
         } else {
           setError(`AI suggestions failed: ${errorData.error}`);
         }
@@ -109,7 +111,9 @@ export default function EnhancedAIAssistant({
       }
     } catch (error) {
       console.error("Error generating AI suggestions:", error);
-      setError("Failed to generate AI suggestions. Using smart suggestions instead.");
+      setError(
+        "Failed to generate AI suggestions. Using smart suggestions instead."
+      );
       setDynamicSuggestions(generateFallbackSuggestions());
     } finally {
       setIsLoadingSuggestions(false);
@@ -119,17 +123,20 @@ export default function EnhancedAIAssistant({
   const generateFallbackSuggestions = useCallback((): string[] => {
     if (!fullSchema || fullSchema.length === 0) return [];
 
-    const allTables = fullSchema.flatMap(schema => schema.tables);
+    const allTables = fullSchema.flatMap((schema) => schema.tables);
     const suggestions: string[] = [];
 
     // Determine which table to focus on
     let focusTable = allTables[0]; // Default to first table
     if (selectedTable) {
       // Find the selected table in the schema
-      focusTable = allTables.find(t =>
-        t.table_name === selectedTable.table &&
-        (t.table_schema === selectedTable.schema || currentSchema === selectedTable.schema)
-      ) || allTables[0];
+      focusTable =
+        allTables.find(
+          (t) =>
+            t.table_name === selectedTable.table &&
+            (t.table_schema === selectedTable.schema ||
+              currentSchema === selectedTable.schema)
+        ) || allTables[0];
     }
 
     if (focusTable) {
@@ -142,23 +149,27 @@ export default function EnhancedAIAssistant({
       suggestions.push(`Show first 10 rows from ${tableName}`);
 
       // Column-specific suggestions
-      const dateColumns = columns.filter(c =>
-        c.column_name.toLowerCase().includes('date') ||
-        c.column_name.toLowerCase().includes('created') ||
-        c.column_name.toLowerCase().includes('updated') ||
-        c.data_type?.toLowerCase().includes('timestamp')
+      const dateColumns = columns.filter(
+        (c) =>
+          c.column_name.toLowerCase().includes("date") ||
+          c.column_name.toLowerCase().includes("created") ||
+          c.column_name.toLowerCase().includes("updated") ||
+          c.data_type?.toLowerCase().includes("timestamp")
       );
 
       if (dateColumns.length > 0) {
         const dateCol = dateColumns[0].column_name;
-        suggestions.push(`Show recent entries from ${tableName} ordered by ${dateCol}`);
+        suggestions.push(
+          `Show recent entries from ${tableName} ordered by ${dateCol}`
+        );
         suggestions.push(`Count records by date from ${tableName}`);
       }
 
-      const nameColumns = columns.filter(c =>
-        c.column_name.toLowerCase().includes('name') ||
-        c.column_name.toLowerCase().includes('title') ||
-        c.column_name.toLowerCase().includes('description')
+      const nameColumns = columns.filter(
+        (c) =>
+          c.column_name.toLowerCase().includes("name") ||
+          c.column_name.toLowerCase().includes("title") ||
+          c.column_name.toLowerCase().includes("description")
       );
 
       if (nameColumns.length > 0) {
@@ -167,8 +178,8 @@ export default function EnhancedAIAssistant({
         suggestions.push(`Search ${tableName} by ${nameCol}`);
       }
 
-      const idColumns = columns.filter(c =>
-        c.column_name.toLowerCase().includes('id') && c.is_primary_key
+      const idColumns = columns.filter(
+        (c) => c.column_name.toLowerCase().includes("id") && c.is_primary_key
       );
 
       if (idColumns.length > 0) {
@@ -182,8 +193,10 @@ export default function EnhancedAIAssistant({
 
       // If we have multiple tables, add join suggestions
       if (allTables.length > 1 && selectedTable) {
-        const otherTables = allTables.filter(t => t.table_name !== tableName).slice(0, 2);
-        otherTables.forEach(otherTable => {
+        const otherTables = allTables
+          .filter((t) => t.table_name !== tableName)
+          .slice(0, 2);
+        otherTables.forEach((otherTable) => {
           suggestions.push(`Join ${tableName} with ${otherTable.table_name}`);
         });
       }
@@ -231,7 +244,7 @@ export default function EnhancedAIAssistant({
         connectionId,
         name: favoriteName.trim(),
         sql: sqlQuery.trim(),
-        description: favoriteDescription.trim()
+        description: favoriteDescription.trim(),
       });
 
       loadFavorites(); // Refresh favorites list
@@ -259,7 +272,9 @@ export default function EnhancedAIAssistant({
     return tables.map((table) => ({
       name: table.table_name,
       schema: table.table_schema || currentSchema,
-      fullTableName: `${table.table_schema || currentSchema}."${table.table_name}"`,
+      fullTableName: `${table.table_schema || currentSchema}."${
+        table.table_name
+      }"`,
       columns: table.columns.map((col) => ({
         name: col.column_name,
         type: col.data_type,
@@ -322,15 +337,23 @@ export default function EnhancedAIAssistant({
         throw new Error(errorData.error || "Failed to generate SQL");
       }
 
-      const { response: aiResponse } = await response.json();
+      const { response: aiResponse, validationWarning } = await response.json();
       if (aiResponse?.sql) {
         setSqlQuery(aiResponse.sql);
         setShowAIInput(false);
+
+        // Show validation warning if present
+        if (validationWarning) {
+          setError(`⚠️ ${validationWarning}`);
+          // Clear the warning after 5 seconds
+          setTimeout(() => setError(null), 5000);
+        }
       } else {
         throw new Error("AI did not generate valid SQL");
       }
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to generate SQL query";
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to generate SQL query";
       setError(errorMessage);
     } finally {
       setIsGenerating(false);
@@ -347,7 +370,8 @@ export default function EnhancedAIAssistant({
       await onQueryExecute(sqlQuery);
       // Results will be displayed in the main TableViewer
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to execute query";
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to execute query";
       setError(errorMessage);
     } finally {
       setIsExecuting(false);
@@ -419,12 +443,15 @@ export default function EnhancedAIAssistant({
               disabled={isLoadingSuggestions}
               className="p-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
               title="Generate AI suggestions">
-              <RefreshCw className={`h-3 w-3 ${isLoadingSuggestions ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`h-3 w-3 ${
+                  isLoadingSuggestions ? "animate-spin" : ""
+                }`}
+              />
               <span>AI</span>
             </button>
           </div>
         </div>
-
 
         {/* Table Context */}
         {showTableContext && tables.length > 0 && (
@@ -465,7 +492,9 @@ export default function EnhancedAIAssistant({
             {favorites.length > 0 ? (
               <div className="space-y-1">
                 {favorites.map((favorite) => (
-                  <div key={favorite.id} className="flex items-center justify-between group">
+                  <div
+                    key={favorite.id}
+                    className="flex items-center justify-between group">
                     <button
                       onClick={() => loadFavoriteQuery(favorite)}
                       className="flex-1 text-left text-xs text-gray-900 hover:text-black hover:bg-gray-100 p-1 rounded truncate"
@@ -492,7 +521,6 @@ export default function EnhancedAIAssistant({
         {/* AI Input Section */}
         {showAIInput && (
           <div className="space-y-3">
-
             <div className="space-y-3">
               <Textarea
                 placeholder="Describe what you want to query in plain English..."
@@ -505,12 +533,13 @@ export default function EnhancedAIAssistant({
                 <button
                   onClick={handleGenerateSQL}
                   disabled={!naturalLanguage.trim() || isGenerating}
-                  className={`flex-1 px-4 py-2 border rounded font-medium text-sm transition-colors ${isGenerating
-                    ? "bg-gray-100 border-gray-300 text-gray-400 cursor-not-allowed"
-                    : !naturalLanguage.trim()
+                  className={`flex-1 px-4 py-2 border rounded font-medium text-sm transition-colors ${
+                    isGenerating
+                      ? "bg-gray-100 border-gray-300 text-gray-400 cursor-not-allowed"
+                      : !naturalLanguage.trim()
                       ? "bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed"
                       : "bg-black border-black text-white hover:bg-gray-800"
-                    }`}>
+                  }`}>
                   {isGenerating ? (
                     <div className="flex items-center justify-center">
                       <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin mr-2"></div>
@@ -546,15 +575,20 @@ export default function EnhancedAIAssistant({
                 )}
               </div>
               <div className="grid grid-cols-1 gap-1 max-h-48 overflow-y-auto">
-                {(dynamicSuggestions.length > 0 ? dynamicSuggestions : fallbackSuggestions).slice(0, 8).map((query, index) => (
-                  <button
-                    key={index}
-                    onClick={() => setNaturalLanguage(query)}
-                    className="text-left text-xs text-gray-900 hover:text-black hover:bg-gray-100 p-1 rounded truncate"
-                    title={query}>
-                    {query}
-                  </button>
-                ))}
+                {(dynamicSuggestions.length > 0
+                  ? dynamicSuggestions
+                  : fallbackSuggestions
+                )
+                  .slice(0, 8)
+                  .map((query, index) => (
+                    <button
+                      key={index}
+                      onClick={() => setNaturalLanguage(query)}
+                      className="text-left text-xs text-gray-900 hover:text-black hover:bg-gray-100 p-1 rounded truncate"
+                      title={query}>
+                      {query}
+                    </button>
+                  ))}
               </div>
             </div>
           </div>
@@ -627,14 +661,14 @@ export default function EnhancedAIAssistant({
                       startLineNumber: position.lineNumber,
                       endLineNumber: position.lineNumber,
                       startColumn: word.startColumn,
-                      endColumn: word.endColumn
+                      endColumn: word.endColumn,
                     };
 
                     return {
-                      suggestions: monacoCompletionProvider.map(item => ({
+                      suggestions: monacoCompletionProvider.map((item) => ({
                         ...item,
-                        range
-                      }))
+                        range,
+                      })),
                     };
                   },
                 });
@@ -658,7 +692,9 @@ export default function EnhancedAIAssistant({
       {showSaveFavorite && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-4 w-80 max-w-sm mx-4">
-            <h3 className="text-lg font-medium text-gray-900 mb-3">Save Query as Favorite</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-3">
+              Save Query as Favorite
+            </h3>
             <div className="space-y-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -705,7 +741,6 @@ export default function EnhancedAIAssistant({
           </div>
         </div>
       )}
-
     </div>
   );
 }

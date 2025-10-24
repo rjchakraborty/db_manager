@@ -9,6 +9,8 @@ export interface DatabaseConnection {
   ssl: boolean;
   createdAt: Date;
   isActive?: boolean;
+  requiresTunnel?: boolean;
+  tunnelId?: string;
 }
 
 export interface DatabaseSchema {

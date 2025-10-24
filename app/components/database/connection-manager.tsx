@@ -14,7 +14,31 @@ import {
   TestTube,
   Eye,
   EyeOff,
+  Wifi,
+  WifiOff,
+  Activity,
 } from "lucide-react";
+// Import types and constants locally to avoid client-side Node.js imports
+interface TunnelStatus {
+  id: string;
+  isActive: boolean;
+  localPort: number;
+  pid?: number;
+  error?: string;
+  startedAt?: Date;
+}
+
+interface TunnelConfig {
+  id: string;
+  name: string;
+  localPort: number;
+  remoteHost: string;
+  remotePort: number;
+  sshHost: string;
+  sshUser: string;
+  privateKey: string;
+  isActive: boolean;
+}
 
 const CONNECTIONS_STORAGE_KEY = "db-connections";
 
@@ -39,6 +63,7 @@ export default function ConnectionManager({
     username: "",
     password: "",
     ssl: false,
+    requiresTunnel: false,
   });
   const [showPassword, setShowPassword] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
@@ -46,10 +71,35 @@ export default function ConnectionManager({
     success: boolean;
     message: string;
   } | null>(null);
+  const [tunnelStatuses, setTunnelStatuses] = useState<
+    Map<string, TunnelStatus>
+  >(new Map());
+  const [startingTunnel, setStartingTunnel] = useState<string | null>(null);
+  const [tunnelConfig, setTunnelConfig] = useState<TunnelConfig | null>(null);
 
   // Load connections from secure storage
   useEffect(() => {
     loadConnections();
+    loadTunnelStatuses();
+    loadTunnelConfig();
+  }, []);
+
+  const loadTunnelConfig = async () => {
+    try {
+      const response = await fetch("/api/tunnel/config");
+      const result = await response.json();
+      if (result.success && result.config) {
+        setTunnelConfig(result.config);
+      }
+    } catch (error) {
+      console.error("Error loading tunnel config:", error);
+    }
+  };
+
+  // Poll tunnel statuses periodically
+  useEffect(() => {
+    const interval = setInterval(loadTunnelStatuses, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadConnections = () => {
@@ -64,6 +114,22 @@ export default function ConnectionManager({
       console.error("Error loading connections:", error);
       // If there's an error loading (e.g., corrupted data), start fresh
       setConnections([]);
+    }
+  };
+
+  const loadTunnelStatuses = async () => {
+    try {
+      const response = await fetch("/api/tunnel/status");
+      const result = await response.json();
+      if (result.success && result.statuses) {
+        const statusMap = new Map<string, TunnelStatus>();
+        result.statuses.forEach((status: TunnelStatus) => {
+          statusMap.set(status.id, status);
+        });
+        setTunnelStatuses(statusMap);
+      }
+    } catch (error) {
+      console.error("Error loading tunnel statuses:", error);
     }
   };
 
@@ -91,6 +157,8 @@ export default function ConnectionManager({
       return;
     }
 
+    const requiresTunnel = formData.requiresTunnel || false;
+
     const connectionData: DatabaseConnection = {
       id: editingConnection?.id || generateId(),
       name: formData.name!,
@@ -99,7 +167,10 @@ export default function ConnectionManager({
       database: formData.database!,
       username: formData.username!,
       password: formData.password!,
-      ssl: formData.ssl || false,
+      // Force SSL to true if tunnel is required (RDS requires SSL)
+      ssl: requiresTunnel ? true : formData.ssl || false,
+      requiresTunnel: requiresTunnel,
+      tunnelId: requiresTunnel ? "default-rds-tunnel" : undefined,
       createdAt: editingConnection?.createdAt || new Date(),
     };
 
@@ -126,6 +197,7 @@ export default function ConnectionManager({
       username: connection.username,
       password: connection.password,
       ssl: connection.ssl,
+      requiresTunnel: connection.requiresTunnel,
     });
     setShowForm(true);
     setTestResult(null);
@@ -151,9 +223,58 @@ export default function ConnectionManager({
       username: "",
       password: "",
       ssl: false,
+      requiresTunnel: false,
     });
     setShowPassword(false);
     setTestResult(null);
+  };
+
+  const handleStartTunnel = async (tunnelId: string) => {
+    if (!tunnelConfig) {
+      alert("Tunnel configuration not loaded");
+      return;
+    }
+
+    setStartingTunnel(tunnelId);
+    try {
+      const response = await fetch("/api/tunnel/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tunnelConfig),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        await loadTunnelStatuses();
+      } else {
+        alert(`Failed to start tunnel: ${result.error}`);
+      }
+    } catch (error) {
+      console.error("Error starting tunnel:", error);
+      alert("Failed to start tunnel");
+    } finally {
+      setStartingTunnel(null);
+    }
+  };
+
+  const handleStopTunnel = async (tunnelId: string) => {
+    try {
+      const response = await fetch("/api/tunnel/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: tunnelId }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        await loadTunnelStatuses();
+      } else {
+        alert(`Failed to stop tunnel: ${result.error}`);
+      }
+    } catch (error) {
+      console.error("Error stopping tunnel:", error);
+      alert("Failed to stop tunnel");
+    }
   };
 
   const handleTestConnection = async () => {
@@ -170,19 +291,36 @@ export default function ConnectionManager({
       return;
     }
 
+    // Check if tunnel is required and active
+    if (formData.requiresTunnel) {
+      const tunnelStatus = tunnelStatuses.get("default-rds-tunnel");
+      if (!tunnelStatus?.isActive) {
+        setTestResult({
+          success: false,
+          message:
+            "RDS tunnel is required but not active. Please start the tunnel first.",
+        });
+        return;
+      }
+    }
+
     setTestingConnection(true);
     setTestResult(null);
 
     try {
+      const requiresTunnel = formData.requiresTunnel || false;
+
       const testConnection: DatabaseConnection = {
         id: "test",
         name: "Test Connection",
-        host: formData.host!.trim(),
+        host: requiresTunnel ? "localhost" : formData.host!.trim(), // Use localhost if tunnel is active
         port: formData.port || 5432,
         database: formData.database!.trim(),
         username: formData.username!.trim(),
         password: formData.password!,
-        ssl: formData.ssl || false,
+        // Force SSL to true if tunnel is required (RDS requires SSL)
+        ssl: requiresTunnel ? true : formData.ssl || false,
+        requiresTunnel: requiresTunnel,
         createdAt: new Date(),
       };
 
@@ -228,20 +366,82 @@ export default function ConnectionManager({
         {connections.map((connection) => (
           <div
             key={connection.id}
-            className={`p-3 rounded border cursor-pointer transition-colors ${selectedConnectionId === connection.id
+            className={`p-3 rounded border cursor-pointer transition-colors ${
+              selectedConnectionId === connection.id
                 ? "bg-gray-100 border-black"
                 : "bg-white border-gray-300 hover:bg-gray-50"
-              }`}
-            onClick={() => onConnectionSelect(connection)}>
+            }`}
+            onClick={() => {
+              // Check if tunnel is required and active before allowing connection
+              if (connection.requiresTunnel && connection.tunnelId) {
+                const tunnelStatus = tunnelStatuses.get(connection.tunnelId);
+                if (!tunnelStatus?.isActive) {
+                  alert(
+                    "Please start the RDS tunnel before connecting to this database."
+                  );
+                  return;
+                }
+              }
+              onConnectionSelect(connection);
+            }}>
             <div className="flex items-center justify-between">
               <div className="flex-1 min-w-0">
-                <h3 className="font-medium text-sm truncate text-black">
-                  {connection.name}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-sm truncate text-black">
+                    {connection.name}
+                  </h3>
+                  {connection.requiresTunnel && (
+                    <div className="flex items-center">
+                      {connection.tunnelId &&
+                      tunnelStatuses.get(connection.tunnelId)?.isActive ? (
+                        <div title="Tunnel Active">
+                          <Activity className="h-3 w-3 text-green-600" />
+                        </div>
+                      ) : (
+                        <div title="Tunnel Inactive">
+                          <WifiOff className="h-3 w-3 text-gray-400" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <p className="text-xs text-gray-600 truncate">
                   {connection.username}@{connection.host}:{connection.port}/
                   {connection.database}
+                  {connection.requiresTunnel && " (via tunnel)"}
                 </p>
+                {connection.requiresTunnel && connection.tunnelId && (
+                  <div className="flex items-center gap-1 mt-1">
+                    {tunnelStatuses.get(connection.tunnelId)?.isActive ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStopTunnel(connection.tunnelId!);
+                        }}
+                        className="h-6 px-2 text-xs text-red-600 hover:text-red-700">
+                        <WifiOff className="h-3 w-3 mr-1" />
+                        Stop Tunnel
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartTunnel(connection.tunnelId!);
+                        }}
+                        disabled={startingTunnel === connection.tunnelId}
+                        className="h-6 px-2 text-xs text-green-600 hover:text-green-700">
+                        <Wifi className="h-3 w-3 mr-1" />
+                        {startingTunnel === connection.tunnelId
+                          ? "Starting..."
+                          : "Start Tunnel"}
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex items-center space-x-1 ml-2">
                 <Button
@@ -419,6 +619,68 @@ export default function ConnectionManager({
                 </label>
               </div>
 
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="requiresTunnel"
+                  checked={formData.requiresTunnel}
+                  onChange={(e) => {
+                    const requiresTunnel = e.target.checked;
+                    // Automatically enable SSL when tunnel is enabled (RDS requires SSL)
+                    setFormData((prev) => ({
+                      ...prev,
+                      requiresTunnel,
+                      ssl: requiresTunnel ? true : prev.ssl, // Force SSL on if tunnel is enabled
+                    }));
+                  }}
+                  className="mr-2 h-4 w-4 text-black border-black rounded"
+                />
+                <label
+                  htmlFor="requiresTunnel"
+                  className="text-sm text-black font-medium">
+                  Requires RDS Tunnel
+                </label>
+              </div>
+
+              {formData.requiresTunnel && (
+                <div className="bg-gray-50 p-3 rounded border text-sm text-gray-700">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wifi className="h-4 w-4" />
+                    <span className="font-medium">
+                      RDS Tunnel Configuration
+                    </span>
+                  </div>
+                  <p className="text-xs">
+                    This connection will use the default RDS tunnel
+                    configuration:
+                  </p>
+                  {tunnelConfig ? (
+                    <ul className="text-xs mt-1 space-y-1">
+                      <li>• Local Port: {tunnelConfig.localPort}</li>
+                      <li>
+                        • Remote: {tunnelConfig.remoteHost}:
+                        {tunnelConfig.remotePort}
+                      </li>
+                      <li>
+                        • SSH: {tunnelConfig.sshUser}@{tunnelConfig.sshHost}
+                      </li>
+                    </ul>
+                  ) : (
+                    <div className="text-xs mt-1 text-gray-500">
+                      Loading configuration...
+                    </div>
+                  )}
+                  <p className="text-xs mt-2 text-blue-600">
+                    ℹ️ SSL is automatically enabled for tunnel connections
+                    (required by RDS).
+                  </p>
+                  <p className="text-xs mt-1 text-amber-600">
+                    Make sure to start the tunnel before connecting to the
+                    database.
+                  </p>
+                </div>
+              )}
+
               {/* Test Connection */}
               <div className="pt-2">
                 <Button
@@ -433,10 +695,11 @@ export default function ConnectionManager({
 
                 {testResult && (
                   <div
-                    className={`text-sm p-2 rounded border ${testResult.success
+                    className={`text-sm p-2 rounded border ${
+                      testResult.success
                         ? "bg-white text-black border-black"
                         : "bg-white text-black border-black"
-                      }`}>
+                    }`}>
                     {testResult.message}
                   </div>
                 )}

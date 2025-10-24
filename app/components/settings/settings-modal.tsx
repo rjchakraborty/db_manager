@@ -6,6 +6,28 @@ import { secureStorage } from "@/lib/encryption";
 import { generateId } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+// Import only types and constants, not the tunnel manager implementation
+export interface TunnelStatus {
+  id: string;
+  isActive: boolean;
+  localPort: number;
+  pid?: number;
+  error?: string;
+  startedAt?: Date;
+}
+
+export interface TunnelConfig {
+  id: string;
+  name: string;
+  localPort: number;
+  remoteHost: string;
+  remotePort: number;
+  sshHost: string;
+  sshUser: string;
+  privateKey: string;
+  isActive: boolean;
+}
+
 import {
   X,
   Plus,
@@ -18,6 +40,10 @@ import {
   Star,
   StarOff,
   RefreshCw,
+  Wifi,
+  WifiOff,
+  Activity,
+  Settings,
 } from "lucide-react";
 
 const CONNECTIONS_STORAGE_KEY = "db-connections";
@@ -67,6 +93,11 @@ export default function SettingsModal({
   const [schemaCacheStatus, setSchemaCacheStatus] = useState<Map<string, boolean>>(new Map());
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [tunnelStatuses, setTunnelStatuses] = useState<Map<string, TunnelStatus>>(new Map());
+  const [startingTunnel, setStartingTunnel] = useState<string | null>(null);
+  const [showTunnelConfig, setShowTunnelConfig] = useState(false);
+  const [editingTunnel, setEditingTunnel] = useState<TunnelConfig | null>(null);
+  const [tunnelConfig, setTunnelConfig] = useState<TunnelConfig | null>(null);
 
 
 
@@ -89,6 +120,34 @@ export default function SettingsModal({
       console.error('Error checking schema cache status:', error);
     }
   }, [connections]);
+
+  const loadTunnelStatuses = useCallback(async () => {
+    try {
+      const response = await fetch('/api/tunnel/status');
+      const result = await response.json();
+      if (result.success && result.statuses) {
+        const statusMap = new Map<string, TunnelStatus>();
+        result.statuses.forEach((status: TunnelStatus) => {
+          statusMap.set(status.id, status);
+        });
+        setTunnelStatuses(statusMap);
+      }
+    } catch (error) {
+      console.error('Error loading tunnel statuses:', error);
+    }
+  }, []);
+
+  const loadTunnelConfig = useCallback(async () => {
+    try {
+      const response = await fetch('/api/tunnel/config');
+      const result = await response.json();
+      if (result.success && result.config) {
+        setTunnelConfig(result.config);
+      }
+    } catch (error) {
+      console.error('Error loading tunnel config:', error);
+    }
+  }, []);
 
   const loadConnections = () => {
     try {
@@ -148,8 +207,10 @@ export default function SettingsModal({
       loadConnections();
       loadDefaultConnection();
       loadGeminiApiKey();
+      loadTunnelStatuses();
+      loadTunnelConfig();
     }
-  }, [isOpen]);
+  }, [isOpen, loadTunnelStatuses, loadTunnelConfig]);
 
   // Separate effect to check schema cache status when connections change
   useEffect(() => {
@@ -157,6 +218,14 @@ export default function SettingsModal({
       checkSchemaCacheStatus();
     }
   }, [isOpen, connections, checkSchemaCacheStatus]);
+
+  // Poll tunnel statuses periodically when modal is open
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const interval = setInterval(loadTunnelStatuses, 5000);
+    return () => clearInterval(interval);
+  }, [isOpen, loadTunnelStatuses]);
 
   const saveGeminiApiKey = (keyValue?: string) => {
     const keyToSave = keyValue || geminiApiKey;
@@ -194,6 +263,54 @@ export default function SettingsModal({
     setShowApiKeyInput(true);
   };
 
+  const handleStartTunnel = async (tunnelId: string) => {
+    if (!tunnelConfig) {
+      alert('Tunnel configuration not loaded');
+      return;
+    }
+
+    setStartingTunnel(tunnelId);
+    try {
+      const response = await fetch('/api/tunnel/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tunnelConfig)
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        await loadTunnelStatuses();
+      } else {
+        alert(`Failed to start tunnel: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error starting tunnel:', error);
+      alert('Failed to start tunnel');
+    } finally {
+      setStartingTunnel(null);
+    }
+  };
+
+  const handleStopTunnel = async (tunnelId: string) => {
+    try {
+      const response = await fetch('/api/tunnel/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tunnelId })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        await loadTunnelStatuses();
+      } else {
+        alert(`Failed to stop tunnel: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error stopping tunnel:', error);
+      alert('Failed to stop tunnel');
+    }
+  };
+
   const parseConnectionUrl = (url: string): Partial<DatabaseConnection> | null => {
     try {
       // Validate URL format
@@ -218,9 +335,16 @@ export default function SettingsModal({
       const database = parsedUrl.pathname.slice(1); // Remove leading slash
       const port = parsedUrl.port ? parseInt(parsedUrl.port) : 5432;
 
-      // Check for SSL parameter
-      const ssl = parsedUrl.searchParams.get('sslmode') === 'require' ||
-        parsedUrl.searchParams.get('ssl') === 'true';
+      // Check for SSL parameter - support more SSL modes
+      const sslMode = parsedUrl.searchParams.get('sslmode');
+      const sslParam = parsedUrl.searchParams.get('ssl');
+
+      // Enable SSL for: sslmode=require/prefer/allow, ssl=true, or if connecting to RDS
+      const ssl = sslMode === 'require' ||
+        sslMode === 'prefer' ||
+        sslMode === 'allow' ||
+        sslParam === 'true' ||
+        parsedUrl.hostname.includes('rds.amazonaws.com');
 
       return {
         host: parsedUrl.hostname,
@@ -812,6 +936,105 @@ export default function SettingsModal({
               </form>
             </div>
           )}
+
+          {/* RDS Tunnel Management Section */}
+          <div className="mt-8 border-t border-gray-200 pt-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-black">RDS Tunnel Management</h3>
+              <Button
+                onClick={() => loadTunnelStatuses()}
+                size="sm"
+                variant="outline">
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Refresh
+              </Button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Default RDS Tunnel */}
+              {tunnelConfig ? (
+                <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-medium text-black">
+                          {tunnelConfig.name}
+                        </h4>
+                        {tunnelStatuses.get('default-rds-tunnel')?.isActive ? (
+                          <div className="flex items-center gap-1">
+                            <Activity className="h-4 w-4 text-green-600" />
+                            <span className="text-xs text-green-600 font-medium">Active</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <WifiOff className="h-4 w-4 text-gray-400" />
+                            <span className="text-xs text-gray-500">Inactive</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-600 mt-1">
+                        <div>Local: localhost:{tunnelConfig.localPort}</div>
+                        <div>Remote: {tunnelConfig.remoteHost}:{tunnelConfig.remotePort}</div>
+                        <div>SSH: {tunnelConfig.sshUser}@{tunnelConfig.sshHost}</div>
+                      </div>
+                      {tunnelStatuses.get('default-rds-tunnel')?.error && (
+                        <div className="text-xs text-red-600 mt-2 p-2 bg-red-50 border border-red-200 rounded">
+                          Error: {tunnelStatuses.get('default-rds-tunnel')?.error}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-4">
+                      {tunnelStatuses.get('default-rds-tunnel')?.isActive ? (
+                        <Button
+                          onClick={() => handleStopTunnel('default-rds-tunnel')}
+                          size="sm"
+                          variant="outline"
+                          className="text-red-600 hover:text-red-700 border-red-200 hover:border-red-300">
+                          <WifiOff className="h-4 w-4 mr-1" />
+                          Stop
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={() => handleStartTunnel('default-rds-tunnel')}
+                          size="sm"
+                          disabled={startingTunnel === 'default-rds-tunnel'}
+                          className="bg-green-600 hover:bg-green-700 text-white">
+                          <Wifi className="h-4 w-4 mr-1" />
+                          {startingTunnel === 'default-rds-tunnel' ? 'Starting...' : 'Start'}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {tunnelStatuses.get('default-rds-tunnel')?.startedAt && (
+                    <div className="text-xs text-gray-500 mt-2">
+                      Started: {new Date(tunnelStatuses.get('default-rds-tunnel')!.startedAt!).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
+                  <div className="flex items-center justify-center">
+                    <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                    <span className="text-sm text-gray-600">Loading tunnel configuration...</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="text-sm text-gray-600 bg-blue-50 p-3 rounded border border-blue-200">
+                <div className="flex items-start gap-2">
+                  <Settings className="h-4 w-4 mt-0.5 text-blue-600" />
+                  <div>
+                    <p className="font-medium text-blue-900 mb-1">About RDS Tunnels</p>
+                    <p className="text-blue-800">
+                      RDS tunnels create secure SSH connections to access remote databases.
+                      Start the tunnel before connecting to databases that require it.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* AI Configuration Section */}
           <div className="mt-8 border-t border-gray-200 pt-6">

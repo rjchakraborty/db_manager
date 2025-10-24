@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Copy, Edit3, Save, X, AlertCircle, RefreshCw } from "lucide-react";
+import { Copy, Edit3, Save, X, AlertCircle, RefreshCw, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/utils";
 import { DatabaseColumn } from "@/types/database";
@@ -24,7 +24,6 @@ export default function DataViewer({
     data,
     dataType,
     columnName,
-    tableName,
     isEditable = false,
     column,
     onSave,
@@ -35,6 +34,7 @@ export default function DataViewer({
     const [validationError, setValidationError] = useState<string | null>(null);
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isCopied, setIsCopied] = useState(false);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -77,7 +77,7 @@ export default function DataViewer({
             }
 
             // Data is a string, check if it's JSON
-            let stringData = String(data);
+            const stringData = String(data);
 
             // Try to parse as JSON for formatting
             try {
@@ -92,7 +92,7 @@ export default function DataViewer({
                 setEditingValue(stringData);
                 setIsValidJson(false);
             }
-        } catch (err) {
+        } catch {
             setFormattedData("");
             setEditingValue("");
             setIsValidJson(false);
@@ -153,9 +153,20 @@ export default function DataViewer({
     };
 
     // Copy to clipboard
-    const handleCopy = async () => {
+    const handleCopy = async (e: React.MouseEvent<HTMLButtonElement>) => {
+        // Remove focus from button to prevent persistent focus state
+        e.currentTarget.blur();
+
         const textToCopy = isEditing ? editingValue : formattedData;
-        await copyToClipboard(textToCopy);
+        const success = await copyToClipboard(textToCopy);
+
+        if (success) {
+            setIsCopied(true);
+            // Reset the copied state after 2 seconds
+            setTimeout(() => {
+                setIsCopied(false);
+            }, 2000);
+        }
     };
 
     // Start editing
@@ -246,7 +257,17 @@ export default function DataViewer({
     }
 
     return (
-        <div className="bg-white border-t border-gray-200 flex flex-col min-h-0">
+        <div className="bg-white border-t border-gray-200 flex flex-col h-full relative">
+            {/* Copy Success Toast */}
+            {isCopied && (
+                <div className="absolute top-2 right-2 z-50 bg-green-100 border border-green-200 text-green-800 px-3 py-1 rounded-md text-xs font-medium shadow-sm animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                    <div className="flex items-center space-x-1">
+                        <Check className="h-3 w-3" />
+                        <span>Copied!</span>
+                    </div>
+                </div>
+            )}
+
             {/* Simple Header */}
             <div className="flex items-center justify-between p-2 border-b border-gray-200 bg-gray-50 flex-shrink-0">
                 <div className="flex items-center space-x-2 min-w-0">
@@ -278,8 +299,20 @@ export default function DataViewer({
                                     <Edit3 className="h-3 w-3" />
                                 </Button>
                             )}
-                            <Button onClick={handleCopy} variant="outline" size="sm">
-                                <Copy className="h-3 w-3" />
+                            <Button
+                                onClick={handleCopy}
+                                variant="outline"
+                                size="sm"
+                                className={isCopied
+                                    ? 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100 focus:bg-green-50 transition-all duration-200'
+                                    : ''
+                                }
+                            >
+                                {isCopied ? (
+                                    <Check className="h-3 w-3 transition-all duration-200" />
+                                ) : (
+                                    <Copy className="h-3 w-3 transition-all duration-200" />
+                                )}
                             </Button>
                         </>
                     )}
@@ -297,9 +330,9 @@ export default function DataViewer({
             )}
 
             {/* Content */}
-            <div className="flex-1 min-h-0 p-2">
+            <div className="flex-1 overflow-hidden p-2">
                 {isEditing ? (
-                    <div className="h-full flex flex-col">
+                    <div className="h-full">
                         {/* Editor Input */}
                         {editingValue.length > 100 || editingValue.includes('\n') || isValidJson ? (
                             <textarea
@@ -307,7 +340,7 @@ export default function DataViewer({
                                 value={editingValue}
                                 onChange={(e) => handleEditingValueChange(e.target.value)}
                                 onKeyDown={handleKeyDown}
-                                className="w-full flex-1 text-xs font-mono resize-none border border-gray-300 rounded p-2 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 overflow-auto"
+                                className="w-full h-full text-xs font-mono resize-none border border-gray-300 rounded p-2 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                 placeholder={column?.is_nullable ? "Enter value or leave empty for NULL" : "Enter value"}
                             />
                         ) : (
@@ -316,14 +349,14 @@ export default function DataViewer({
                                 value={editingValue}
                                 onChange={(e) => handleEditingValueChange(e.target.value)}
                                 onKeyDown={handleKeyDown}
-                                className="w-full text-xs font-mono border border-gray-300 rounded p-2 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 overflow-x-auto"
+                                className="w-full h-8 text-xs font-mono border border-gray-300 rounded p-2 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                 placeholder={column?.is_nullable ? "Enter value or leave empty for NULL" : "Enter value"}
                             />
                         )}
                     </div>
                 ) : (
-                    <div className="h-full overflow-auto">
-                        <pre className="text-xs font-mono whitespace-pre text-gray-800 leading-relaxed min-w-max">
+                    <div className="h-full overflow-auto border border-gray-200 rounded">
+                        <pre className="text-xs font-mono whitespace-pre text-gray-800 leading-relaxed p-2 min-w-max">
                             {formattedData}
                         </pre>
                     </div>

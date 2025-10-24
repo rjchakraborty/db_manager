@@ -19,7 +19,7 @@ import { ResizablePanel } from "@/components/ui/resizable-panel";
 export default function Home() {
     const [selectedConnection, setSelectedConnection] =
         useState<DatabaseConnection | null>(null);
-    const [_connections, setConnections] = useState<DatabaseConnection[]>([]);
+    const [, setConnections] = useState<DatabaseConnection[]>([]);
     const [selectedTable, setSelectedTable] = useState<{
         schema: string;
         table: string;
@@ -165,7 +165,7 @@ export default function Home() {
                 defaultConnection,
                 () => {
                     // On successful connection, fetch schema
-                    fetchFullSchema(defaultConnection.id, (_schemas) => {
+                    fetchFullSchema(defaultConnection.id, () => {
                     });
                 },
                 (error) => {
@@ -191,7 +191,7 @@ export default function Home() {
                     // On successful connection, fetch schema
                     fetchFullSchema(
                         connection.id,
-                        (_schemas) => {
+                        () => {
                             resolve();
                         },
                         (error) => {
@@ -340,49 +340,51 @@ export default function Home() {
         return result;
     };
 
-    const _handleAIQuery = async (naturalLanguage: string): Promise<string> => {
-        if (!selectedConnection) {
-            throw new Error("No database connection selected");
-        }
+    // AI query handler (currently unused but kept for future use)
+    // const handleAIQuery = async (naturalLanguage: string): Promise<string> => {
+    //     if (!selectedConnection) {
+    //         throw new Error("No database connection selected");
+    //     }
 
-        if (!naturalLanguage.trim()) {
-            throw new Error("Please enter a natural language query");
-        }
+    //     if (!naturalLanguage.trim()) {
+    //         throw new Error("Please enter a natural language query");
+    //     }
 
-        try {
-            const response = await fetch("/api/ai/query", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    naturalLanguage: naturalLanguage.trim(),
-                    context: {
-                        tables: availableTables,
-                        currentSchema,
-                    },
-                }),
-            });
+    //     try {
+    //         const response = await fetch("/api/ai/query", {
+    //             method: "POST",
+    //             headers: { "Content-Type": "application/json" },
+    //             body: JSON.stringify({
+    //                 naturalLanguage: naturalLanguage.trim(),
+    //                 context: {
+    //                     tables: availableTables,
+    //                     currentSchema,
+    //                 },
+    //             }),
+    //         });
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || "Failed to generate SQL");
-            }
+    //         if (!response.ok) {
+    //             const errorData = await response.json();
+    //             throw new Error(errorData.error || "Failed to generate SQL");
+    //         }
 
-            const { response: aiResponse } = await response.json();
+    //         const { response: aiResponse } = await response.json();
 
-            if (aiResponse?.sql) {
-                return aiResponse.sql;
-            } else {
-                throw new Error("AI did not generate valid SQL");
-            }
-        } catch (error: unknown) {
-            console.error("AI query generation failed:", error);
-            throw new Error(error instanceof Error ? error.message : "Failed to generate SQL query");
-        }
-    };
+    //         if (aiResponse?.sql) {
+    //             return aiResponse.sql;
+    //         } else {
+    //             throw new Error("AI did not generate valid SQL");
+    //         }
+    //     } catch (error: unknown) {
+    //         console.error("AI query generation failed:", error);
+    //         throw new Error(error instanceof Error ? error.message : "Failed to generate SQL query");
+    //     }
+    // };
 
-    const _handleSQLGenerated = (_sql: string) => {
-        // SQL generated, will be handled in the enhanced AI assistant
-    };
+    // SQL generation handler (currently unused but kept for future use)
+    // const handleSQLGenerated = (sql: string) => {
+    //     // SQL generated, will be handled in the enhanced AI assistant
+    // };
 
     // DataViewer handlers
     const openDataViewer = (data: unknown, columnName: string, dataType: string, tableName?: string, column?: DatabaseColumn, rowIndex: number = -1) => {

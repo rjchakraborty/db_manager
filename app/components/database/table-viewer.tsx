@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { DatabaseTable, QueryResult, DatabaseColumn } from "@/types/database";
 import { formatNumber, copyToClipboard, downloadAsFile } from "@/lib/utils";
@@ -14,7 +14,6 @@ import {
   ChevronRight,
   Key,
   Link,
-  Save,
   X,
   Trash2,
   FileJson,
@@ -50,18 +49,17 @@ export default function TableViewer({
   const [checkingDependencies, setCheckingDependencies] = useState(false);
 
 
-  const editInputRef = useRef<HTMLInputElement>(null);
   const rowsPerPage = 100;
 
   // Helper function to open data viewer
   const handleCellClick = (data: unknown, columnName: string, column?: DatabaseColumn, rowIdx: number = -1) => {
     if (onDataViewerOpen) {
       onDataViewerOpen(
-        data, 
-        columnName, 
-        column?.data_type || "text", 
-        `${schema}.${tableName}`, 
-        column, 
+        data,
+        columnName,
+        column?.data_type || "text",
+        `${schema}.${tableName}`,
+        column,
         rowIdx
       );
     }
@@ -197,36 +195,38 @@ export default function TableViewer({
     return pkValue;
   };
 
-  const isColumnEditable = (columnName: string): boolean => {
-    const column = table?.columns.find(col => col.column_name === columnName);
-    return column ? !column.is_primary_key : true;
-  };
+  // Column editing helper (currently unused but kept for future use)
+  // const isColumnEditable = (columnName: string): boolean => {
+  //   const column = table?.columns.find(col => col.column_name === columnName);
+  //   return column ? !column.is_primary_key : true;
+  // };
 
-  const validateValue = (value: string, column: DatabaseColumn): string | null => {
-    // Basic validation
-    if (!column.is_nullable && (value === "" || value === null)) {
-      return "This field cannot be null";
-    }
+  // Validation function (currently unused but kept for future use)
+  // const validateValue = (value: string, column: DatabaseColumn): string | null => {
+  //   // Basic validation
+  //   if (!column.is_nullable && (value === "" || value === null)) {
+  //     return "This field cannot be null";
+  //   }
 
-    // Type-specific validation
-    if (column.data_type.includes('integer') || column.data_type.includes('bigint')) {
-      if (value !== "" && isNaN(Number(value))) {
-        return "Must be a valid number";
-      }
-    }
+  //   // Type-specific validation
+  //   if (column.data_type.includes('integer') || column.data_type.includes('bigint')) {
+  //     if (value !== "" && isNaN(Number(value))) {
+  //       return "Must be a valid number";
+  //     }
+  //   }
 
-    if (column.data_type.includes('numeric') || column.data_type.includes('decimal')) {
-      if (value !== "" && isNaN(Number(value))) {
-        return "Must be a valid decimal number";
-      }
-    }
+  //   if (column.data_type.includes('numeric') || column.data_type.includes('decimal')) {
+  //     if (value !== "" && isNaN(Number(value))) {
+  //       return "Must be a valid decimal number";
+  //     }
+  //   }
 
-    if (column.character_maximum_length && value.length > column.character_maximum_length) {
-      return `Maximum length is ${column.character_maximum_length} characters`;
-    }
+  //   if (column.character_maximum_length && value.length > column.character_maximum_length) {
+  //     return `Maximum length is ${column.character_maximum_length} characters`;
+  //   }
 
-    return null;
-  };
+  //   return null;
+  // };
 
 
   const checkDependencies = async (rowIndex: number) => {
@@ -453,7 +453,7 @@ export default function TableViewer({
 
                     <div className="flex items-center space-x-2">
                       <Button
-                        onClick={() => deleteRow(confirmDelete)}
+                        onClick={() => confirmDelete !== null && deleteRow(confirmDelete)}
                         disabled={updating}
                         size="sm"
                         className={`${dependencies.length > 0 ? 'bg-orange-600 hover:bg-orange-700' : 'bg-red-600 hover:bg-red-700'} text-white`}>
@@ -579,7 +579,7 @@ export default function TableViewer({
                   <table className="w-full min-w-max table-auto">
                     <thead className="bg-white border-b-2 border-black sticky top-0 z-10">
                       <tr>
-                        {data.fields.map((field) => (
+                        {data && data.fields.map((field) => (
                           <th
                             key={field.name}
                             className="px-4 py-3 text-left text-xs font-medium text-black tracking-wider border-b border-gray-400 whitespace-nowrap min-w-[120px] bg-white">
@@ -607,7 +607,7 @@ export default function TableViewer({
                       </tr>
                     </thead>
                     <tbody className="bg-white">
-                      {data.rows.map((row, rowIndex) => {
+                      {data && data.rows.map((row, rowIndex) => {
                         return (
                           <tr
                             key={rowIndex}
@@ -616,8 +616,7 @@ export default function TableViewer({
                               ${confirmDelete === rowIndex ? "bg-red-100" : ""}
                             `}>
 
-                            {data.fields.map((field) => {
-                              const isEditable = !queryResult && connectionId && isColumnEditable(field.name) && confirmDelete === null;
+                            {data && data.fields.map((field) => {
                               const column = table?.columns.find(col => col.column_name === field.name);
 
                               return (
@@ -626,9 +625,9 @@ export default function TableViewer({
                                   className={`px-4 py-3 text-sm border-b border-gray-200 min-w-[120px] max-w-[400px] cursor-pointer hover:bg-gray-100 ${column?.is_primary_key ? "bg-gray-50" : ""}`}
                                   onClick={() => {
                                     handleCellClick(
-                                      row[field.name], 
-                                      field.name, 
-                                      column, 
+                                      row[field.name],
+                                      field.name,
+                                      column,
                                       rowIndex
                                     );
                                   }}
@@ -687,7 +686,7 @@ export default function TableViewer({
                 </div>
 
                 {/* No Data Message */}
-                {data.rows.length === 0 && (
+                {data && data.rows.length === 0 && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white">
                     <div className="text-center text-black">
                       <Eye className="mx-auto h-12 w-12 text-gray-600 mb-2" />

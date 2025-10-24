@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+rds_tunnel.sh
+test-tunnel-connection.js
+*.pem

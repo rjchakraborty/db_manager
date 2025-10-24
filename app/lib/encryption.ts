@@ -75,7 +75,7 @@ export const secureStorage = {
       try {
         // Normal path: decrypt previously stored cipher text
         return decryptObject<T>(encrypted);
-      } catch (_decryptError: unknown) {
+      } catch {
         // Backward-compat: attempt to parse plaintext JSON (legacy storage)
         try {
           const parsed = JSON.parse(encrypted) as T;

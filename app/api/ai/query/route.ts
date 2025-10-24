@@ -35,28 +35,58 @@ export async function POST(request: NextRequest) {
       context,
     });
 
+    console.log("🤖 Generated SQL:", response.sql);
+    console.log("📊 AI Confidence:", response.confidence);
+
     // Validate generated SQL against the live connection using EXPLAIN
-    try {
-      const connectionId = context?.connectionId;
-      if (!connectionId) {
-        throw new Error("Missing connectionId for validation");
+    let validationWarning: string | null = null;
+    const connectionId = context?.connectionId;
+
+    if (connectionId) {
+      try {
+        console.log("⏳ Validating SQL with EXPLAIN...");
+        await DatabaseService.executeQuery(
+          connectionId,
+          `EXPLAIN ${response.sql}`
+        );
+        console.log("✅ SQL validation passed");
+      } catch (e: unknown) {
+        const errorMessage = e instanceof Error ? e.message : "Unknown error";
+        console.warn("⚠️ SQL validation failed (non-fatal):", errorMessage);
+        console.warn("Generated SQL:", response.sql);
+
+        // If validation fails due to connection issues, just warn but continue
+        if (
+          errorMessage.includes("No configuration found") ||
+          errorMessage.includes("Failed to establish database connection")
+        ) {
+          validationWarning =
+            "Could not validate SQL (connection unavailable). Please review before executing.";
+        } else {
+          // For actual SQL errors, add them as suggestions
+          validationWarning = `SQL validation warning: ${errorMessage}`;
+          response.suggestions = [
+            ...(response.suggestions || []),
+            `Validation error: ${errorMessage}`,
+            "Please review and test the SQL before executing",
+          ];
+        }
       }
-      await DatabaseService.executeQuery(connectionId, `EXPLAIN ${response.sql}`);
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : "Unknown error";
-      return NextResponse.json(
-        { error: `SQL validation failed: ${errorMessage}` },
-        { status: 400 }
-      );
+    } else {
+      console.log("⏭️ Skipping SQL validation (no connectionId provided)");
+      validationWarning = "SQL validation skipped (no active connection)";
     }
 
-    return NextResponse.json({ response });
+    return NextResponse.json({
+      response,
+      validationWarning,
+    });
   } catch (error: unknown) {
     console.error("AI query conversion error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Failed to convert natural language to SQL";
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    );
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Failed to convert natural language to SQL";
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
