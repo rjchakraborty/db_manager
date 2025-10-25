@@ -6,6 +6,7 @@ import {
   DatabaseColumn,
   QueryResult,
 } from "@/types/database";
+import net from "net";
 
 // Singleton Pool Manager
 class DatabasePoolManager {
@@ -370,8 +371,6 @@ async function verifyTunnelConnection(
   port: number,
   maxRetries: number = 3
 ): Promise<boolean> {
-  const net = require("net");
-
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const isConnectable = await new Promise<boolean>((resolve) => {
@@ -397,7 +396,7 @@ async function verifyTunnelConnection(
         console.log(`✅ Tunnel connection verified on attempt ${attempt}`);
         return true;
       }
-    } catch (error) {
+    } catch {
       console.log(`⚠️ Tunnel verification attempt ${attempt} failed`);
     }
 
