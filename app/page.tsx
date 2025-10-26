@@ -15,6 +15,8 @@ import {
 import { Settings, Menu, X, RefreshCw } from "lucide-react";
 import { ConnectionManager } from "@/lib/connection-manager";
 import { ResizablePanel } from "@/components/ui/resizable-panel";
+import { QueryHistoryManager } from "@/lib/query-history";
+import { secureStorage } from "@/lib/encryption";
 
 export default function Home() {
   const [selectedConnection, setSelectedConnection] =
@@ -383,7 +385,89 @@ export default function Home() {
 
     const { result } = await response.json();
     setQueryResult(result);
+
+    // Auto-save successful query to history (fire and forget)
+    saveQueryToHistory(query, result).catch((err) => {
+      console.error("Failed to save query to history:", err);
+    });
+
     return result;
+  };
+
+  // Helper function to save query to history
+  const saveQueryToHistory = async (query: string, result: QueryResult) => {
+    try {
+      // Only save SELECT queries (not mutations)
+      const normalizedQuery = query.trim().toUpperCase();
+      if (!normalizedQuery.startsWith("SELECT")) {
+        return; // Don't save INSERT, UPDATE, DELETE, etc.
+      }
+
+      // Extract table name from query
+      const tableName = QueryHistoryManager.extractTableName(query);
+      const schemaName = selectedTable?.schema || currentSchema;
+
+      // Save to history with a placeholder title (will be updated by AI)
+      const savedEntry = QueryHistoryManager.saveQuery({
+        connectionId: selectedConnection!.id,
+        tableName,
+        schemaName,
+        sql: query,
+        title: "Generating title...", // Placeholder
+      });
+
+      // Immediately try to generate AI title (still async but prioritized)
+      tryGenerateAITitle(savedEntry.id, query);
+    } catch (error) {
+      console.error("Error saving query to history:", error);
+    }
+  };
+
+  // Helper function to generate AI title in the background
+  const tryGenerateAITitle = async (queryId: string, sql: string) => {
+    try {
+      // Get API key from storage
+      const GEMINI_API_KEY_STORAGE = "gemini-api-key";
+      let storedApiKey = null;
+
+      if (typeof window !== "undefined" && window.localStorage) {
+        storedApiKey = localStorage.getItem(GEMINI_API_KEY_STORAGE);
+      }
+
+      if (!storedApiKey) {
+        storedApiKey = secureStorage.get<string>(GEMINI_API_KEY_STORAGE);
+      }
+
+      if (!storedApiKey) {
+        // No API key, use simple title generation as fallback
+        const simpleTitle = QueryHistoryManager.generateSimpleTitle(sql);
+        QueryHistoryManager.updateQueryTitle(queryId, simpleTitle);
+        return;
+      }
+
+      // Call the API to generate a title using Gemini 2.0 Flash
+      const response = await fetch("/api/ai/generate-title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql, apiKey: storedApiKey }),
+      });
+
+      if (response.ok) {
+        const { title, description } = await response.json();
+        if (title) {
+          QueryHistoryManager.updateQueryTitle(queryId, title, description);
+        }
+      } else {
+        // AI failed, use simple title
+        const simpleTitle = QueryHistoryManager.generateSimpleTitle(sql);
+        QueryHistoryManager.updateQueryTitle(queryId, simpleTitle);
+      }
+    } catch (error) {
+      // On error, use simple title generation as fallback
+      console.debug("AI title generation failed, using simple title:", error);
+      const simpleTitle = QueryHistoryManager.generateSimpleTitle(sql);
+      QueryHistoryManager.updateQueryTitle(queryId, simpleTitle);
+    }
   };
 
   // AI query handler (currently unused but kept for future use)

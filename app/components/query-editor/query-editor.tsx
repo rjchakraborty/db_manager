@@ -18,6 +18,7 @@ import { QueryResult, QueryError, DatabaseTable } from "@/types/database";
 import { copyToClipboard, downloadAsFile } from "@/lib/utils";
 import { FavoritesManager, FavoriteQuery } from "@/lib/favorites";
 import { SQLIntelligenceProvider, AIRateLimiter } from "@/lib/sql-intelligence";
+import { QueryHistoryManager } from "@/lib/query-history";
 
 interface QueryEditorProps {
   connectionId?: string;
@@ -28,7 +29,12 @@ interface QueryEditorProps {
   isAIEnabled?: boolean;
   tables?: DatabaseTable[]; // Schema data for intelligent suggestions
   currentSchema?: string;
-  onDataViewerOpen?: (data: unknown, columnName: string, dataType: string, tableName?: string) => void;
+  onDataViewerOpen?: (
+    data: unknown,
+    columnName: string,
+    dataType: string,
+    tableName?: string
+  ) => void;
 }
 
 export default function QueryEditor({
@@ -55,9 +61,14 @@ export default function QueryEditor({
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteDescription, setFavoriteDescription] = useState("");
 
-
-  const editorRef = useRef<{ getValue: () => string; setValue: (value: string) => void; focus: () => void } | null>(null);
-  const sqlIntelligence = useRef<SQLIntelligenceProvider>(new SQLIntelligenceProvider(tables, currentSchema));
+  const editorRef = useRef<{
+    getValue: () => string;
+    setValue: (value: string) => void;
+    focus: () => void;
+  } | null>(null);
+  const sqlIntelligence = useRef<SQLIntelligenceProvider>(
+    new SQLIntelligenceProvider(tables, currentSchema)
+  );
   const aiRateLimiter = useRef<AIRateLimiter>(new AIRateLimiter(5, 1)); // 5 calls per minute
 
   // Helper function to handle cell clicks
@@ -66,8 +77,6 @@ export default function QueryEditor({
       onDataViewerOpen(data, columnName, "text", "Query Results");
     }
   };
-
-
 
   const loadFavorites = useCallback(() => {
     if (connectionId) {
@@ -84,7 +93,7 @@ export default function QueryEditor({
         connectionId,
         name: favoriteName.trim(),
         sql: query.trim(),
-        description: favoriteDescription.trim()
+        description: favoriteDescription.trim(),
       });
 
       loadFavorites(); // Refresh favorites list
@@ -93,7 +102,10 @@ export default function QueryEditor({
       setFavoriteDescription("");
     } catch (error) {
       console.error("Error saving favorite:", error);
-      setError({ message: "Failed to save favorite query", code: "SAVE_ERROR" });
+      setError({
+        message: "Failed to save favorite query",
+        code: "SAVE_ERROR",
+      });
     }
   };
 
@@ -167,7 +179,10 @@ export default function QueryEditor({
     // Register intelligent completion provider
     monaco.languages.registerCompletionItemProvider("sql", {
       provideCompletionItems: (model, position) => {
-        const completions = sqlIntelligence.current.getCompletions(model, position);
+        const completions = sqlIntelligence.current.getCompletions(
+          model,
+          position
+        );
         const word = model.getWordUntilPosition(position);
         const range = new monaco.Range(
           position.lineNumber,
@@ -177,18 +192,22 @@ export default function QueryEditor({
         );
 
         return {
-          suggestions: completions.map(completion => ({
+          suggestions: completions.map((completion) => ({
             label: completion.label,
-            kind: monaco.languages.CompletionItemKind[completion.kind as keyof typeof monaco.languages.CompletionItemKind] || monaco.languages.CompletionItemKind.Text,
+            kind:
+              monaco.languages.CompletionItemKind[
+                completion.kind as keyof typeof monaco.languages.CompletionItemKind
+              ] || monaco.languages.CompletionItemKind.Text,
             insertText: completion.insertText,
-            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            insertTextRules:
+              monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
             detail: completion.detail,
             documentation: completion.documentation,
             sortText: completion.sortText,
             range: range,
-          }))
+          })),
         };
-      }
+      },
     });
 
     // Register hover provider
@@ -197,72 +216,164 @@ export default function QueryEditor({
         const hoverInfo = sqlIntelligence.current.getHoverInfo(model, position);
         if (hoverInfo) {
           return {
-            range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
-            contents: [{ value: hoverInfo }]
+            range: new monaco.Range(
+              position.lineNumber,
+              position.column,
+              position.lineNumber,
+              position.column
+            ),
+            contents: [{ value: hoverInfo }],
           };
         }
         return null;
-      }
+      },
     });
 
     // Enhanced SQL syntax highlighting
-    monaco.languages.setMonarchTokensProvider('sql', {
+    monaco.languages.setMonarchTokensProvider("sql", {
       keywords: [
-        'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
-        'GROUP', 'BY', 'ORDER', 'HAVING', 'UNION', 'CREATE', 'DROP', 'ALTER', 'TABLE', 'INDEX', 'VIEW',
-        'DATABASE', 'SCHEMA', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK', 'TRANSACTION', 'BEGIN', 'END',
-        'AS', 'ON', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'IS', 'NULL', 'AND', 'OR', 'NOT', 'DISTINCT',
-        'CASE', 'WHEN', 'THEN', 'ELSE', 'IF', 'LIMIT', 'OFFSET', 'WITH', 'RECURSIVE', 'RETURNING'
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "JOIN",
+        "LEFT",
+        "RIGHT",
+        "INNER",
+        "OUTER",
+        "GROUP",
+        "BY",
+        "ORDER",
+        "HAVING",
+        "UNION",
+        "CREATE",
+        "DROP",
+        "ALTER",
+        "TABLE",
+        "INDEX",
+        "VIEW",
+        "DATABASE",
+        "SCHEMA",
+        "GRANT",
+        "REVOKE",
+        "COMMIT",
+        "ROLLBACK",
+        "TRANSACTION",
+        "BEGIN",
+        "END",
+        "AS",
+        "ON",
+        "IN",
+        "EXISTS",
+        "BETWEEN",
+        "LIKE",
+        "IS",
+        "NULL",
+        "AND",
+        "OR",
+        "NOT",
+        "DISTINCT",
+        "CASE",
+        "WHEN",
+        "THEN",
+        "ELSE",
+        "IF",
+        "LIMIT",
+        "OFFSET",
+        "WITH",
+        "RECURSIVE",
+        "RETURNING",
       ],
       operators: [
-        '=', '>', '<', '!', '~', '?', ':', '==', '<=', '>=', '!=',
-        '&&', '||', '++', '--', '+', '-', '*', '/', '&', '|', '^', '%',
-        '<<', '>>', '>>>', '+=', '-=', '*=', '/=', '&=', '|=', '^=',
-        '%=', '<<=', '>>=', '>>>='
+        "=",
+        ">",
+        "<",
+        "!",
+        "~",
+        "?",
+        ":",
+        "==",
+        "<=",
+        ">=",
+        "!=",
+        "&&",
+        "||",
+        "++",
+        "--",
+        "+",
+        "-",
+        "*",
+        "/",
+        "&",
+        "|",
+        "^",
+        "%",
+        "<<",
+        ">>",
+        ">>>",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "&=",
+        "|=",
+        "^=",
+        "%=",
+        "<<=",
+        ">>=",
+        ">>>=",
       ],
       symbols: /[=><!~?:&|+\-*\/\^%]+/,
       tokenizer: {
         root: [
-          [/[a-z_$][\w$]*/, {
-            cases: {
-              '@keywords': 'keyword',
-              '@default': 'identifier'
-            }
-          }],
-          [/[A-Z][\w\$]*/, 'type.identifier'],
-          [/"([^"\\]|\\.)*$/, 'string.invalid'],
-          [/'([^'\\]|\\.)*$/, 'string.invalid'],
-          [/"/, 'string', '@string_double'],
-          [/'/, 'string', '@string_single'],
-          [/\d*\.\d+([eE][\-+]?\d+)?/, 'number.float'],
-          [/0[xX][0-9a-fA-F]+/, 'number.hex'],
-          [/\d+/, 'number'],
-          [/[;,.]/, 'delimiter'],
-          [/[()[\]]/, '@brackets'],
-          [/[{}]/, 'delimiter.bracket'],
-          [/@symbols/, {
-            cases: {
-              '@operators': 'operator',
-              '@default': ''
-            }
-          }],
-          [/--.*$/, 'comment'],
-          [/\/\*/, 'comment', '@comment'],
+          [
+            /[a-z_$][\w$]*/,
+            {
+              cases: {
+                "@keywords": "keyword",
+                "@default": "identifier",
+              },
+            },
+          ],
+          [/[A-Z][\w\$]*/, "type.identifier"],
+          [/"([^"\\]|\\.)*$/, "string.invalid"],
+          [/'([^'\\]|\\.)*$/, "string.invalid"],
+          [/"/, "string", "@string_double"],
+          [/'/, "string", "@string_single"],
+          [/\d*\.\d+([eE][\-+]?\d+)?/, "number.float"],
+          [/0[xX][0-9a-fA-F]+/, "number.hex"],
+          [/\d+/, "number"],
+          [/[;,.]/, "delimiter"],
+          [/[()[\]]/, "@brackets"],
+          [/[{}]/, "delimiter.bracket"],
+          [
+            /@symbols/,
+            {
+              cases: {
+                "@operators": "operator",
+                "@default": "",
+              },
+            },
+          ],
+          [/--.*$/, "comment"],
+          [/\/\*/, "comment", "@comment"],
         ],
         comment: [
-          [/[^\/*]+/, 'comment'],
-          [/\*\//, 'comment', '@pop'],
-          [/[\/*]/, 'comment']
+          [/[^\/*]+/, "comment"],
+          [/\*\//, "comment", "@pop"],
+          [/[\/*]/, "comment"],
         ],
         string_double: [
-          [/[^\\"]+/, 'string'],
-          [/"/, 'string', '@pop']
+          [/[^\\"]+/, "string"],
+          [/"/, "string", "@pop"],
         ],
         string_single: [
-          [/[^\\']+/, 'string'],
-          [/'/, 'string', '@pop']
-        ]
-      }
+          [/[^\\']+/, "string"],
+          [/'/, "string", "@pop"],
+        ],
+      },
     });
 
     // Add keyboard shortcuts
@@ -275,9 +386,12 @@ export default function QueryEditor({
     });
 
     // Add format document command
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => {
-      editor.getAction('editor.action.formatDocument')?.run();
-    });
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
+      () => {
+        editor.getAction("editor.action.formatDocument")?.run();
+      }
+    );
   };
 
   const handleExecuteQuery = useCallback(async () => {
@@ -290,12 +404,31 @@ export default function QueryEditor({
     try {
       const result = await onQueryExecute(query);
       setResult(result);
+
+      // Auto-save successful SELECT queries to history (fire and forget)
+      const normalizedQuery = query.trim().toUpperCase();
+      if (normalizedQuery.startsWith("SELECT")) {
+        try {
+          const tableName = QueryHistoryManager.extractTableName(query);
+          const title = QueryHistoryManager.generateSimpleTitle(query);
+
+          QueryHistoryManager.saveQuery({
+            connectionId,
+            tableName,
+            schemaName: currentSchema,
+            sql: query,
+            title,
+          });
+        } catch (historyError) {
+          console.error("Failed to save query to history:", historyError);
+        }
+      }
     } catch (err: unknown) {
       setError(err as QueryError);
     } finally {
       setIsExecuting(false);
     }
-  }, [connectionId, query, onQueryExecute]);
+  }, [connectionId, query, onQueryExecute, currentSchema]);
 
   const handleGenerateSQL = useCallback(async () => {
     if (!onAIQuery || !aiInput.trim()) return;
@@ -306,7 +439,7 @@ export default function QueryEditor({
       const minutes = Math.ceil(timeUntilNext / 60000);
       setError({
         message: `AI rate limit exceeded. Please wait ${minutes} minute(s) before making another AI request.`,
-        code: "RATE_LIMIT_EXCEEDED"
+        code: "RATE_LIMIT_EXCEEDED",
       });
       return;
     }
@@ -322,8 +455,9 @@ export default function QueryEditor({
     } catch (err: unknown) {
       console.error("AI query generation failed:", err);
       setError({
-        message: err instanceof Error ? err.message : "Failed to generate SQL query",
-        code: "AI_GENERATION_ERROR"
+        message:
+          err instanceof Error ? err.message : "Failed to generate SQL query",
+        code: "AI_GENERATION_ERROR",
       });
     } finally {
       setIsGenerating(false);
@@ -484,59 +618,62 @@ export default function QueryEditor({
           </div>
           <div className="flex justify-between items-center mt-2">
             <p className="text-sm text-gray-500">
-              Example: &quot;Show me all users who registered last month&quot; or &quot;Find the
-              top 10 products by sales&quot;
+              Example: &quot;Show me all users who registered last month&quot;
+              or &quot;Find the top 10 products by sales&quot;
             </p>
             <p className="text-xs text-gray-400">
-              AI calls remaining: {aiRateLimiter.current.getRemainingCalls()}/5 per minute
+              AI calls remaining: {aiRateLimiter.current.getRemainingCalls()}/5
+              per minute
             </p>
           </div>
         </div>
       )}
 
       {/* SQL Editor */}
-      <div className="flex-1 flex flex-col">
-        <Editor
-          height="300px"
-          defaultLanguage="sql"
-          value={query}
-          onChange={(value) => setQuery(value || "")}
-          onMount={handleEditorDidMount}
-          theme="light"
-          options={{
-            minimap: { enabled: false },
-            fontSize: 14,
-            lineNumbers: "on",
-            roundedSelection: false,
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-            tabSize: 2,
-            insertSpaces: true,
-            wordWrap: "on",
-            suggestOnTriggerCharacters: true,
-            quickSuggestions: true,
-            suggestSelection: "first",
-            acceptSuggestionOnEnter: "on",
-            acceptSuggestionOnCommitCharacter: true,
-            snippetSuggestions: "top",
-            formatOnPaste: true,
-            formatOnType: true,
-            colorDecorators: true,
-            bracketPairColorization: { enabled: true },
-            guides: {
-              bracketPairs: true,
-              indentation: true,
-            },
-            renderWhitespace: "selection",
-            renderControlCharacters: false,
-            folding: true,
-            lineDecorationsWidth: 0,
-            lineNumbersMinChars: 3,
-          }}
-        />
+      <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 min-h-0">
+          <Editor
+            height="100%"
+            defaultLanguage="sql"
+            value={query}
+            onChange={(value) => setQuery(value || "")}
+            onMount={handleEditorDidMount}
+            theme="light"
+            options={{
+              minimap: { enabled: false },
+              fontSize: 14,
+              lineNumbers: "on",
+              roundedSelection: false,
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              tabSize: 2,
+              insertSpaces: true,
+              wordWrap: "on",
+              suggestOnTriggerCharacters: true,
+              quickSuggestions: true,
+              suggestSelection: "first",
+              acceptSuggestionOnEnter: "on",
+              acceptSuggestionOnCommitCharacter: true,
+              snippetSuggestions: "top",
+              formatOnPaste: true,
+              formatOnType: true,
+              colorDecorators: true,
+              bracketPairColorization: { enabled: true },
+              guides: {
+                bracketPairs: true,
+                indentation: true,
+              },
+              renderWhitespace: "selection",
+              renderControlCharacters: false,
+              folding: true,
+              lineDecorationsWidth: 0,
+              lineNumbersMinChars: 3,
+            }}
+          />
+        </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-between p-4 border-t border-gray-200 bg-white">
+        <div className="flex items-center justify-between p-4 border-t border-gray-200 bg-white flex-shrink-0">
           <div className="flex items-center space-x-4">
             <Button
               onClick={() => setShowAIInput(!showAIInput)}
@@ -572,7 +709,9 @@ export default function QueryEditor({
                     <h3 className="text-sm font-medium text-gray-900">
                       Query Error
                     </h3>
-                    <p className="mt-1 text-sm text-gray-900">{error.message}</p>
+                    <p className="mt-1 text-sm text-gray-900">
+                      {error.message}
+                    </p>
                     {error.detail && (
                       <p className="mt-1 text-sm text-gray-700">
                         Detail: {error.detail}
@@ -645,7 +784,12 @@ export default function QueryEditor({
                                     key={field.name}
                                     className="px-4 py-2 text-sm text-gray-900 border-b border-gray-200 min-w-[120px] max-w-[400px] whitespace-nowrap cursor-pointer hover:bg-gray-100"
                                     title={String(row[field.name])}
-                                    onClick={() => handleCellClick(row[field.name], field.name)}>
+                                    onClick={() =>
+                                      handleCellClick(
+                                        row[field.name],
+                                        field.name
+                                      )
+                                    }>
                                     <div className="truncate">
                                       {row[field.name] === null ? (
                                         <span className="text-gray-400 italic">
@@ -683,12 +827,16 @@ export default function QueryEditor({
         {showFavorites && (
           <div className="absolute top-16 left-4 bg-white border border-gray-200 rounded-lg shadow-lg z-10 w-80 max-h-60 overflow-y-auto">
             <div className="p-3 border-b border-gray-200">
-              <h3 className="text-sm font-medium text-gray-900">Saved Queries ({favorites.length})</h3>
+              <h3 className="text-sm font-medium text-gray-900">
+                Saved Queries ({favorites.length})
+              </h3>
             </div>
             {favorites.length > 0 ? (
               <div className="p-2">
                 {favorites.map((favorite) => (
-                  <div key={favorite.id} className="flex items-center justify-between group hover:bg-gray-50 p-2 rounded">
+                  <div
+                    key={favorite.id}
+                    className="flex items-center justify-between group hover:bg-gray-50 p-2 rounded">
                     <button
                       onClick={() => loadFavoriteQuery(favorite)}
                       className="flex-1 text-left">
@@ -722,7 +870,9 @@ export default function QueryEditor({
         {showSaveFavorite && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-96 max-w-sm mx-4">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Save Query as Favorite</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Save Query as Favorite
+              </h3>
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -771,7 +921,6 @@ export default function QueryEditor({
           </div>
         )}
       </div>
-
     </div>
   );
 }

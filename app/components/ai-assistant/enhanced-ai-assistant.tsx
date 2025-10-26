@@ -6,7 +6,8 @@ import { DatabaseTable, QueryResult } from "@/types/database";
 import { Editor } from "@monaco-editor/react";
 import { secureStorage } from "@/lib/encryption";
 import { FavoritesManager, FavoriteQuery } from "@/lib/favorites";
-import { Star, StarOff, RefreshCw, Save } from "lucide-react";
+import { QueryHistoryManager, QueryHistoryEntry } from "@/lib/query-history";
+import { Star, StarOff, RefreshCw, Save, Trash2, X } from "lucide-react";
 
 interface EnhancedAIAssistantProps {
   connectionId?: string;
@@ -34,14 +35,13 @@ export default function EnhancedAIAssistant({
   const [error, setError] = useState<string | null>(null);
   const [showAIInput, setShowAIInput] = useState(true);
   const [showTableContext, setShowTableContext] = useState(false);
-  const [dynamicSuggestions, setDynamicSuggestions] = useState<string[]>([]);
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
-  const [useAISuggestions, setUseAISuggestions] = useState(false);
+  const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
   const [favorites, setFavorites] = useState<FavoriteQuery[]>([]);
   const [showFavorites, setShowFavorites] = useState(false);
   const [showSaveFavorite, setShowSaveFavorite] = useState(false);
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteDescription, setFavoriteDescription] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const loadFavorites = useCallback(() => {
     if (connectionId) {
@@ -50,191 +50,39 @@ export default function EnhancedAIAssistant({
     }
   }, [connectionId]);
 
-  // Load favorites when component mounts or connection changes
+  const loadQueryHistory = useCallback(() => {
+    if (connectionId) {
+      const tableName = selectedTable?.table;
+      const history = QueryHistoryManager.getMostFrequentQueries(
+        connectionId,
+        tableName,
+        10
+      );
+      setQueryHistory(history);
+    }
+  }, [connectionId, selectedTable]);
+
+  // Load favorites and query history when component mounts or connection changes
   useEffect(() => {
     if (connectionId) {
       loadFavorites();
+      loadQueryHistory();
     }
-  }, [connectionId, loadFavorites]);
+  }, [connectionId, loadFavorites, loadQueryHistory]);
 
-  const generateAISuggestions = async () => {
-    if (!connectionId || !fullSchema || fullSchema.length === 0) return;
-
-    setIsLoadingSuggestions(true);
-    try {
-      // Get API key from storage (try plain localStorage first for reliability)
-      let storedApiKey = null;
-      if (typeof window !== "undefined" && window.localStorage) {
-        storedApiKey = localStorage.getItem(GEMINI_API_KEY_STORAGE);
-      }
-
-      // Fallback to encrypted storage
-      if (!storedApiKey) {
-        storedApiKey = secureStorage.get<string>(GEMINI_API_KEY_STORAGE);
-      }
-
-      if (!storedApiKey) {
-        setError(
-          "Please configure your Gemini API key in Settings to use AI suggestions"
-        );
-        return;
-      }
-
-      const response = await fetch("/api/ai/suggestions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionId,
-          fullSchema,
-          apiKey: storedApiKey,
-          selectedTable,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setDynamicSuggestions(data.suggestions || []);
-        setUseAISuggestions(true);
-        setError(null);
-      } else {
-        const errorData = await response
-          .json()
-          .catch(() => ({ error: "Failed to generate AI suggestions" }));
-        if (response.status === 503) {
-          setError(
-            "AI service is currently overloaded. Using smart suggestions instead."
-          );
-        } else {
-          setError(`AI suggestions failed: ${errorData.error}`);
-        }
-        setDynamicSuggestions(generateFallbackSuggestions());
-      }
-    } catch (error) {
-      console.error("Error generating AI suggestions:", error);
-      setError(
-        "Failed to generate AI suggestions. Using smart suggestions instead."
-      );
-      setDynamicSuggestions(generateFallbackSuggestions());
-    } finally {
-      setIsLoadingSuggestions(false);
+  const handleDeleteHistory = (historyId: string) => {
+    if (QueryHistoryManager.deleteQuery(historyId)) {
+      loadQueryHistory(); // Refresh history list
+      setDeleteConfirmId(null);
     }
   };
 
-  const generateFallbackSuggestions = useCallback((): string[] => {
-    if (!fullSchema || fullSchema.length === 0) return [];
-
-    const allTables = fullSchema.flatMap((schema) => schema.tables);
-    const suggestions: string[] = [];
-
-    // Determine which table to focus on
-    let focusTable = allTables[0]; // Default to first table
-    if (selectedTable) {
-      // Find the selected table in the schema
-      focusTable =
-        allTables.find(
-          (t) =>
-            t.table_name === selectedTable.table &&
-            (t.table_schema === selectedTable.schema ||
-              currentSchema === selectedTable.schema)
-        ) || allTables[0];
-    }
-
-    if (focusTable) {
-      const tableName = focusTable.table_name;
-      const columns = focusTable.columns || [];
-
-      // Basic queries
-      suggestions.push(`Show all records from ${tableName}`);
-      suggestions.push(`Count total records in ${tableName}`);
-      suggestions.push(`Show first 10 rows from ${tableName}`);
-
-      // Column-specific suggestions
-      const dateColumns = columns.filter(
-        (c) =>
-          c.column_name.toLowerCase().includes("date") ||
-          c.column_name.toLowerCase().includes("created") ||
-          c.column_name.toLowerCase().includes("updated") ||
-          c.data_type?.toLowerCase().includes("timestamp")
-      );
-
-      if (dateColumns.length > 0) {
-        const dateCol = dateColumns[0].column_name;
-        suggestions.push(
-          `Show recent entries from ${tableName} ordered by ${dateCol}`
-        );
-        suggestions.push(`Count records by date from ${tableName}`);
-      }
-
-      const nameColumns = columns.filter(
-        (c) =>
-          c.column_name.toLowerCase().includes("name") ||
-          c.column_name.toLowerCase().includes("title") ||
-          c.column_name.toLowerCase().includes("description")
-      );
-
-      if (nameColumns.length > 0) {
-        const nameCol = nameColumns[0].column_name;
-        suggestions.push(`Find unique ${nameCol} values in ${tableName}`);
-        suggestions.push(`Search ${tableName} by ${nameCol}`);
-      }
-
-      const idColumns = columns.filter(
-        (c) => c.column_name.toLowerCase().includes("id") && c.is_primary_key
-      );
-
-      if (idColumns.length > 0) {
-        suggestions.push(`Find specific record in ${tableName} by ID`);
-      }
-
-      // Analytical queries
-      if (columns.length > 3) {
-        suggestions.push(`Show ${tableName} structure and column details`);
-      }
-
-      // If we have multiple tables, add join suggestions
-      if (allTables.length > 1 && selectedTable) {
-        const otherTables = allTables
-          .filter((t) => t.table_name !== tableName)
-          .slice(0, 2);
-        otherTables.forEach((otherTable) => {
-          suggestions.push(`Join ${tableName} with ${otherTable.table_name}`);
-        });
-      }
-
-      // Generic analytical queries
-      suggestions.push(`Analyze data distribution in ${tableName}`);
-      suggestions.push(`Find duplicate records in ${tableName}`);
-    }
-
-    // If no specific table, add general suggestions
-    if (!selectedTable && allTables.length > 1) {
-      suggestions.push(`Compare record counts across all tables`);
-      suggestions.push(`Show tables with most records`);
-      suggestions.push(`List all table names and row counts`);
-    }
-
-    return suggestions.slice(0, 10); // Return up to 10 suggestions
-  }, [fullSchema, selectedTable, currentSchema]);
-
-  const generateDynamicSuggestions = useCallback(async () => {
-    if (!connectionId || !fullSchema || fullSchema.length === 0) return;
-
-    // Always use fallback suggestions to avoid overloading the API
-    // This provides immediate, relevant suggestions without API calls
-    setDynamicSuggestions(generateFallbackSuggestions());
-
-    // Optional: Only try AI suggestions if user explicitly requests them
-    // This prevents automatic API calls that can overload the model
-  }, [connectionId, fullSchema, generateFallbackSuggestions]);
-
-  // Generate dynamic suggestions when schema or selected table changes
-  useEffect(() => {
-    if (connectionId && fullSchema && fullSchema.length > 0) {
-      // Reset AI suggestions flag when table changes to show fresh smart suggestions
-      setUseAISuggestions(false);
-      generateDynamicSuggestions();
-    }
-  }, [connectionId, fullSchema, selectedTable, generateDynamicSuggestions]);
+  const loadHistoryQuery = (history: QueryHistoryEntry) => {
+    // Load the actual SQL query (not the title) into the SQL editor
+    setSqlQuery(history.sql);
+    setShowAIInput(false); // Switch to manual SQL editor mode
+    setDeleteConfirmId(null);
+  };
 
   const saveFavorite = () => {
     if (!connectionId || !sqlQuery.trim() || !favoriteName.trim()) return;
@@ -405,16 +253,6 @@ export default function EnhancedAIAssistant({
     navigator.clipboard.writeText(sqlQuery);
   };
 
-  // Fallback static suggestions (used when dynamic suggestions fail)
-  const fallbackSuggestions = [
-    "Show me all records from the first table",
-    "Count total records in each table",
-    "Find tables with the most data",
-    "Show recent entries if date columns exist",
-    "List unique values from name columns",
-    "Compare data across different tables",
-  ];
-
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header */}
@@ -438,18 +276,6 @@ export default function EnhancedAIAssistant({
               className="p-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
               title="Toggle tables">
               Tables
-            </button>
-            <button
-              onClick={generateAISuggestions}
-              disabled={isLoadingSuggestions}
-              className="p-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
-              title="Generate AI suggestions">
-              <RefreshCw
-                className={`h-3 w-3 ${
-                  isLoadingSuggestions ? "animate-spin" : ""
-                }`}
-              />
-              <span>AI</span>
             </button>
           </div>
         </div>
@@ -565,31 +391,63 @@ export default function EnhancedAIAssistant({
               </div>
             </div>
 
-            {/* Dynamic Suggestions */}
+            {/* Query History */}
             <div className="hidden sm:block">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs text-gray-500">
-                  {useAISuggestions ? "AI suggestions:" : "Smart suggestions:"}
+                  Query History {selectedTable && `(${selectedTable.table})`}
                 </p>
-                {isLoadingSuggestions && (
-                  <RefreshCw className="h-3 w-3 animate-spin text-gray-400" />
-                )}
+                <button
+                  onClick={loadQueryHistory}
+                  className="p-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                  title="Refresh history">
+                  <RefreshCw className="h-3 w-3" />
+                </button>
               </div>
               <div className="grid grid-cols-1 gap-1 max-h-48 overflow-y-auto">
-                {(dynamicSuggestions.length > 0
-                  ? dynamicSuggestions
-                  : fallbackSuggestions
-                )
-                  .slice(0, 8)
-                  .map((query, index) => (
-                    <button
-                      key={index}
-                      onClick={() => setNaturalLanguage(query)}
-                      className="text-left text-xs text-gray-900 hover:text-black hover:bg-gray-100 p-1 rounded truncate"
-                      title={query}>
-                      {query}
-                    </button>
-                  ))}
+                {queryHistory.length > 0 ? (
+                  queryHistory.map((history) => (
+                    <div
+                      key={history.id}
+                      className="flex items-center justify-between group hover:bg-gray-100 p-1 rounded">
+                      <button
+                        onClick={() => loadHistoryQuery(history)}
+                        className="flex-1 text-left text-xs text-gray-900 hover:text-black truncate pr-2"
+                        title={history.sql}>
+                        <span className="font-medium">
+                          {history.title || history.sql}
+                        </span>
+                      </button>
+                      {deleteConfirmId === history.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleDeleteHistory(history.id)}
+                            className="p-0.5 text-red-600 hover:text-red-800"
+                            title="Confirm delete">
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirmId(null)}
+                            className="p-0.5 text-gray-600 hover:text-gray-900"
+                            title="Cancel">
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirmId(history.id)}
+                          className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-600 hover:text-red-600 transition-opacity"
+                          title="Delete from history">
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-xs text-gray-500 italic p-2 text-center">
+                    No query history yet. Execute queries to build history.
+                  </div>
+                )}
               </div>
             </div>
           </div>
