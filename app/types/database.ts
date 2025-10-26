@@ -66,6 +66,8 @@ export interface AIQueryRequest {
     currentSchema: string;
     availableTables?: string[];
     tableNames?: string[]; // Add simple table names list
+    selectedTable?: { schema: string; table: string }; // Currently selected/opened table
+    connectionId?: string; // For validation
   };
 }
 

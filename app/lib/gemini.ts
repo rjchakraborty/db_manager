@@ -3,6 +3,7 @@ import {
   AIQueryRequest,
   AIQueryResponse,
   DatabaseTable,
+  DatabaseColumn,
 } from "@/types/database";
 
 let genAI: GoogleGenerativeAI | null = null;
@@ -75,6 +76,168 @@ const generateDatabaseContext = (context: {
     .join("\n\n");
 };
 
+// Helper function to build column hints for semantic matching
+const buildColumnHints = (context: {
+  tables: DatabaseTable[] | Record<string, unknown>[];
+}): string => {
+  if (!context || !context.tables || context.tables.length === 0) {
+    return "";
+  }
+
+  const tables = context.tables;
+  const columnsByType: Record<string, string[]> = {
+    timestamp: [],
+    date: [],
+    time: [],
+    id: [],
+    name: [],
+    email: [],
+    status: [],
+    count: [],
+    amount: [],
+    boolean: [],
+  };
+
+  tables.forEach((table: DatabaseTable | Record<string, unknown>) => {
+    let columns: (DatabaseColumn | Record<string, unknown>)[] = [];
+    let tableName = "";
+
+    if ("name" in table && "columns" in table) {
+      columns = (table as { columns: Record<string, unknown>[] }).columns;
+      tableName =
+        (table.fullTableName as string) || `${table.schema}."${table.name}"`;
+    } else {
+      columns = (table as DatabaseTable).columns;
+      tableName = `${(table as DatabaseTable).table_schema}.${
+        (table as DatabaseTable).table_name
+      }`;
+    }
+
+    columns.forEach((col) => {
+      const colName =
+        "column_name" in col
+          ? (col.column_name as string)
+          : ((col as Record<string, unknown>).name as string);
+      const colType =
+        "data_type" in col
+          ? (col.data_type as string).toLowerCase()
+          : ((col as Record<string, unknown>).type as string).toLowerCase();
+      const colNameLower = colName.toLowerCase();
+      const fullColRef = `${tableName}.${colName}`;
+
+      // Timestamp/Date columns
+      if (
+        colType.includes("timestamp") ||
+        colType.includes("date") ||
+        colType.includes("time")
+      ) {
+        if (
+          colNameLower.includes("created") ||
+          colNameLower === "createdat" ||
+          colNameLower === "created_at"
+        ) {
+          columnsByType.timestamp.unshift(fullColRef + " [created timestamp]");
+        } else if (
+          colNameLower.includes("updated") ||
+          colNameLower === "updatedat" ||
+          colNameLower === "updated_at"
+        ) {
+          columnsByType.timestamp.push(fullColRef + " [updated timestamp]");
+        } else if (
+          colNameLower.includes("date") ||
+          colNameLower.includes("time")
+        ) {
+          columnsByType.date.push(fullColRef);
+        } else {
+          columnsByType.timestamp.push(fullColRef);
+        }
+      }
+
+      // ID columns
+      if (colNameLower.includes("id") || colNameLower === "id") {
+        columnsByType.id.push(fullColRef);
+      }
+
+      // Name columns
+      if (
+        colNameLower.includes("name") ||
+        colNameLower.includes("title") ||
+        colNameLower.includes("label")
+      ) {
+        columnsByType.name.push(fullColRef);
+      }
+
+      // Email columns
+      if (colNameLower.includes("email") || colNameLower.includes("mail")) {
+        columnsByType.email.push(fullColRef);
+      }
+
+      // Status columns
+      if (colNameLower.includes("status") || colNameLower.includes("state")) {
+        columnsByType.status.push(fullColRef);
+      }
+
+      // Count/Amount columns
+      if (
+        colNameLower.includes("count") ||
+        colNameLower.includes("amount") ||
+        colNameLower.includes("quantity") ||
+        colNameLower.includes("total")
+      ) {
+        columnsByType.count.push(fullColRef);
+      }
+
+      // Boolean columns
+      if (
+        colType.includes("bool") ||
+        colNameLower.startsWith("is_") ||
+        colNameLower.startsWith("has_")
+      ) {
+        columnsByType.boolean.push(fullColRef);
+      }
+    });
+  });
+
+  // Build hints string
+  let hints = "\n📋 COLUMN HINTS FOR SMART MATCHING:\n";
+  hints += "Use these when user mentions vague or misspelled column names:\n\n";
+
+  if (columnsByType.timestamp.length > 0) {
+    hints += `⏰ Timestamp/Date columns: ${columnsByType.timestamp
+      .slice(0, 5)
+      .join(", ")}\n`;
+    hints += `   Use for: "date", "time", "when", "created", "updated", "yesterday", "today", "recent"\n\n`;
+  }
+
+  if (columnsByType.id.length > 0) {
+    hints += `🔑 ID columns: ${columnsByType.id.slice(0, 5).join(", ")}\n`;
+    hints += `   Use for: "id", "identifier", "key"\n\n`;
+  }
+
+  if (columnsByType.name.length > 0) {
+    hints += `📝 Name/Title columns: ${columnsByType.name
+      .slice(0, 5)
+      .join(", ")}\n`;
+    hints += `   Use for: "name", "title", "label", "called"\n\n`;
+  }
+
+  if (columnsByType.status.length > 0) {
+    hints += `📊 Status columns: ${columnsByType.status
+      .slice(0, 5)
+      .join(", ")}\n`;
+    hints += `   Use for: "status", "state", "condition"\n\n`;
+  }
+
+  if (columnsByType.count.length > 0) {
+    hints += `🔢 Count/Amount columns: ${columnsByType.count
+      .slice(0, 5)
+      .join(", ")}\n`;
+    hints += `   Use for: "count", "amount", "total", "quantity", "number of"\n\n`;
+  }
+
+  return hints;
+};
+
 export const convertNaturalLanguageToSQL = async (
   request: AIQueryRequest
 ): Promise<AIQueryResponse> => {
@@ -83,19 +246,111 @@ export const convertNaturalLanguageToSQL = async (
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // Use gemini-2.5-pro for more accurate PostgreSQL query generation
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
 
     const databaseContext = request.context
       ? generateDatabaseContext(request.context)
       : "";
+    const columnHints = request.context
+      ? buildColumnHints(request.context)
+      : "";
     const currentSchema = request.context?.currentSchema || "public";
     const availableTables = request.context?.availableTables || [];
 
+    // Enhanced context: Identify the currently selected/focused table
+    const selectedTableInfo = request.context?.selectedTable;
+    let focusedTableContext = "";
+
+    if (selectedTableInfo && request.context?.tables) {
+      const tables = request.context.tables;
+      const focusedTable = tables.find(
+        (t: DatabaseTable | Record<string, unknown>) => {
+          const tableName =
+            "table_name" in t
+              ? t.table_name
+              : (t as Record<string, unknown>).name;
+          const tableSchema =
+            "table_schema" in t
+              ? t.table_schema
+              : (t as Record<string, unknown>).schema;
+          return (
+            tableName === selectedTableInfo.table &&
+            (tableSchema === selectedTableInfo.schema ||
+              currentSchema === selectedTableInfo.schema)
+          );
+        }
+      );
+
+      if (focusedTable) {
+        const tableName =
+          "table_name" in focusedTable
+            ? focusedTable.table_name
+            : (focusedTable as Record<string, unknown>).name;
+        const tableSchema =
+          "table_schema" in focusedTable
+            ? focusedTable.table_schema
+            : (focusedTable as Record<string, unknown>).schema;
+        const fullTableName = `${tableSchema}."${tableName}"`;
+
+        let columnsInfo = "";
+        if ("columns" in focusedTable) {
+          const columns = focusedTable.columns as (
+            | DatabaseColumn
+            | Record<string, unknown>
+          )[];
+          columnsInfo = columns
+            .map((col) => {
+              const colName =
+                "column_name" in col
+                  ? col.column_name
+                  : (col as Record<string, unknown>).name;
+              const colType =
+                "data_type" in col
+                  ? col.data_type
+                  : (col as Record<string, unknown>).type;
+              const isPK =
+                "is_primary_key" in col
+                  ? col.is_primary_key
+                  : (col as Record<string, unknown>).primaryKey;
+              const isFK =
+                "is_foreign_key" in col
+                  ? col.is_foreign_key
+                  : (col as Record<string, unknown>).foreignKey;
+              const nullable =
+                "is_nullable" in col
+                  ? col.is_nullable
+                  : (col as Record<string, unknown>).nullable;
+
+              let info = `  - ${colName}: ${colType}`;
+              if (isPK) info += " [PRIMARY KEY]";
+              if (isFK) info += " [FOREIGN KEY]";
+              if (!nullable) info += " [NOT NULL]";
+              return info;
+            })
+            .join("\n");
+        }
+
+        focusedTableContext = `\n🎯 CURRENTLY SELECTED TABLE (PRIMARY FOCUS):
+Table: ${fullTableName}
+Columns:
+${columnsInfo}
+
+⚠️ IMPORTANT: The user is currently viewing this table. Unless they explicitly mention another table,
+generate queries that work with THIS table using its exact column names shown above.
+`;
+      }
+    }
+
     const prompt = `
-You are a PostgreSQL expert. Convert the following natural language query into a PostgreSQL SQL statement.
+You are a PostgreSQL expert specializing in generating accurate, production-ready SQL queries.
+
+${focusedTableContext}
 
 Database Context:
 ${databaseContext}
+
+${columnHints}
 
 Current Schema: ${currentSchema}
 ${
@@ -113,30 +368,185 @@ ${
 
 Natural Language Query: "${request.naturalLanguage}"
 
-CRITICAL RULES:
-1. Use ONLY the exact table and column names present in the context. Never invent or guess names.
-2. Use ONLY tables listed in Available Tables. If a table/column is missing, state that explicitly in suggestions.
-3. Always schema-qualify tables with quotes: schema."TableName".
-4. Generate ONLY valid PostgreSQL SQL.
-5. For UPDATE/DELETE, include restrictive WHERE clauses; never unbounded.
-6. For SELECT, apply LIMIT 100 unless the user specifies otherwise.
-7. Respect data types and use proper PostgreSQL functions for time/date.
-8. Use explicit JOIN ... ON with provided column names only.
-9. If exact mapping is not possible, return the closest valid SQL and list gaps in suggestions.
+═══════════════════════════════════════════════════════════════════
+CRITICAL PostgreSQL RULES (MUST FOLLOW):
+═══════════════════════════════════════════════════════════════════
 
-DATA TYPE HANDLING (CRITICAL):
-- When comparing text columns with dates/timestamps, use explicit casting: column_name::timestamp or CAST(column_name AS timestamp)
-- For date comparisons, use: column_name >= '2024-01-01'::timestamp or column_name >= TIMESTAMP '2024-01-01'
-- Never compare text directly with timestamp - always cast appropriately
-- Pay attention to column data types in the context above
-- Use TO_TIMESTAMP() or TO_DATE() functions when needed for string to date conversion
+1. ✅ TABLE & COLUMN NAMES:
+   - Use ONLY exact table/column names from the context above
+   - NEVER invent, guess, or assume column names
+   - Always schema-qualify: schema."TableName"
+   - If the focused table is shown above, prioritize using it unless user asks otherwise
 
-IMPORTANT: If you cannot find the exact column mentioned in the query, DO NOT make one up. Instead, suggest using available columns or explain why the query cannot be fulfilled.
+2. ✅ SMART COLUMN MATCHING (HANDLE TYPOS & VAGUE REFERENCES):
+   When the user mentions a column vaguely or with typos, be intelligent:
+   
+   a) Temporal references → Use timestamp/date columns:
+      User says: "date", "time", "when", "created", "yesterday", "today", "recent", "last week"
+      → Look for: created_at, updated_at, timestamp, date, createdat, etc.
+      → Prefer created_at for "when created" or general date references
+      → Use updated_at for "last modified" or "recent updates"
+   
+   b) Identity references → Use ID columns:
+      User says: "id", "identifier", "key", "primary key"
+      → Look for: id, user_id, customer_id, etc.
+   
+   c) Name/Label references → Use name/title columns:
+      User says: "name", "title", "called", "label"
+      → Look for: name, title, username, full_name, label, etc.
+   
+   d) Status references → Use status/state columns:
+      User says: "status", "state", "condition"
+      → Look for: status, state, is_active, etc.
+   
+   e) Quantitative references → Use count/amount columns:
+      User says: "count", "amount", "total", "how many", "number"
+      → Look for: count, amount, total, quantity, etc.
+   
+   f) Boolean references → Use boolean/flag columns:
+      User says: "is", "has", "active", "enabled"
+      → Look for: is_active, is_deleted, has_permission, etc.
+   
+   g) Typo tolerance:
+      - "crated_at" → created_at
+      - "timestmp" → timestamp
+      - "updted" → updated
+      - "usr_id" → user_id
+      - Match similar column names using closest semantic match
+   
+   ⚠️ If you infer a column (due to typo/vague reference), MENTION it in explanation:
+      "Interpreted 'date' as 'created_at' based on available columns"
+
+3. ✅ ORDER BY Smart Defaults:
+   - When user says "order by date" → use the most relevant timestamp column (created_at preferred)
+   - When user says "recent" or "latest" → ORDER BY timestamp DESC
+   - When user says "oldest" or "first" → ORDER BY timestamp ASC
+   - Always specify ASC/DESC explicitly
+
+4. ✅ DATA TYPE CASTING (CRITICAL - COMMON ERROR SOURCE):
+   PostgreSQL is STRICT about type compatibility. Follow these rules precisely:
+
+   a) TIMESTAMP/DATE Comparisons:
+      ❌ WRONG: WHERE textcolumn > '2025-10-25T05:54:33.187+00:00'::textcolumn
+      ✅ RIGHT: WHERE textcolumn::timestamp > '2025-10-25T05:54:33.187+00:00'
+      ✅ RIGHT: WHERE CAST(textcolumn AS timestamp) > '2025-10-25T05:54:33.187+00:00'
+      ✅ RIGHT: WHERE textcolumn::timestamptz > TIMESTAMP '2025-10-25 05:54:33'
+      
+      Rule: Cast the COLUMN (not the literal) when types mismatch
+      
+   b) Date/Time Functions:
+      ✅ NOW() - current timestamp with timezone
+      ✅ CURRENT_DATE - current date
+      ✅ CURRENT_TIMESTAMP - current timestamp
+      ✅ TO_TIMESTAMP(text, format) - convert string to timestamp
+      ✅ TO_DATE(text, format) - convert string to date
+      
+   c) Relative Date Patterns:
+      - Yesterday: WHERE date_column::date = CURRENT_DATE - INTERVAL '1 day'
+      - Today: WHERE date_column::date = CURRENT_DATE
+      - Last 7 days: WHERE date_column >= CURRENT_DATE - INTERVAL '7 days'
+      - This week: WHERE date_column >= DATE_TRUNC('week', CURRENT_DATE)
+      - This month: WHERE date_column >= DATE_TRUNC('month', CURRENT_DATE)
+      - This year: WHERE date_column >= DATE_TRUNC('year', CURRENT_DATE)
+      - Greater than yesterday: WHERE date_column::date > CURRENT_DATE - INTERVAL '1 day'
+
+5. ✅ TEXT vs NUMERIC:
+   - Never compare text with numbers directly
+   ✅ RIGHT: WHERE numeric_column::text LIKE '%pattern%' (when searching numbers as text)
+   ✅ RIGHT: WHERE text_column::integer > 100 (when column contains numeric strings)
+
+6. ✅ JSON/JSONB Handling:
+   ✅ RIGHT: WHERE json_column->>'key' = 'value' (text extraction)
+   ✅ RIGHT: WHERE json_column->'key' = '"value"' (JSON extraction)
+   ✅ RIGHT: WHERE json_column @> '{"key": "value"}' (containment)
+
+7. ✅ BOOLEAN Handling:
+   ✅ RIGHT: WHERE boolean_column = true
+   ✅ RIGHT: WHERE boolean_column IS TRUE
+   ✅ RIGHT: WHERE NOT boolean_column
+
+8. ✅ NULL Handling:
+   ✅ RIGHT: WHERE column IS NULL
+   ✅ RIGHT: WHERE column IS NOT NULL
+   ❌ WRONG: WHERE column = NULL
+
+9. ✅ STRING Matching:
+   - LIKE: case-sensitive pattern matching (use % wildcards)
+   - ILIKE: case-insensitive pattern matching
+   ✅ RIGHT: WHERE name ILIKE '%john%' (find john anywhere, case-insensitive)
+
+10. ✅ QUERY SAFETY:
+    - SELECT: Always add LIMIT 100 unless user specifies otherwise
+    - UPDATE/DELETE: ALWAYS include WHERE clause (never unbounded)
+    - Use ORDER BY for consistent results
+
+11. ✅ IF COLUMN/TABLE NOT FOUND:
+    - DO NOT make up names
+    - Use semantic matching from Column Hints above
+    - Explain your inference in the explanation
+    - If truly not found, list available options in suggestions
+
+═══════════════════════════════════════════════════════════════════
+EXAMPLES OF CORRECT QUERIES WITH SMART MATCHING:
+═══════════════════════════════════════════════════════════════════
+
+Example 1 - Vague date reference:
+Natural: "Show records from yesterday"
+Smart Match: User said "yesterday" → use created_at/timestamp column
+✅ SELECT * FROM public."ApiLog" 
+   WHERE created_at::date = CURRENT_DATE - INTERVAL '1 day'
+   LIMIT 100;
+
+Example 2 - Typo in column:
+Natural: "Order by crated date"
+Smart Match: "crated date" → created_at
+✅ SELECT * FROM public."ApiLog" 
+   ORDER BY created_at DESC 
+   LIMIT 100;
+
+Example 3 - "Greater than yesterday" query:
+Natural: "Show entries greater than yesterday's date order by"
+Smart Match: "greater than yesterday" + "order by" → created_at > yesterday, ORDER BY created_at
+✅ SELECT * FROM public."ApiLog" 
+   WHERE created_at::date > CURRENT_DATE - INTERVAL '1 day'
+   ORDER BY created_at DESC 
+   LIMIT 100;
+
+Example 4 - Recent with vague time:
+Natural: "Show recent entries"
+Smart Match: "recent" → use timestamp, order descending
+✅ SELECT * FROM public."ApiLog" 
+   WHERE created_at > NOW() - INTERVAL '1 day'
+   ORDER BY created_at DESC 
+   LIMIT 100;
+
+Example 5 - Specific timestamp:
+Natural: "Records after 2025-10-25 05:54:33"
+✅ SELECT * FROM public."ApiLog" 
+   WHERE created_at::timestamp > '2025-10-25 05:54:33'
+   ORDER BY created_at DESC 
+   LIMIT 100;
+
+Example 6 - Text search with typo:
+Natural: "Find users with nam containing John"
+Smart Match: "nam" → name
+✅ SELECT * FROM public."Users" 
+   WHERE name ILIKE '%john%' 
+   LIMIT 100;
+
+Example 7 - Count with vague reference:
+Natural: "How many records today"
+Smart Match: "today" → created_at::date = CURRENT_DATE
+✅ SELECT COUNT(*) 
+   FROM public."ApiLog" 
+   WHERE created_at::date = CURRENT_DATE;
+
+═══════════════════════════════════════════════════════════════════
 
 Format your response as JSON:
 {
   "sql": "your generated SQL query here",
-  "explanation": "brief explanation of what the query does",
+  "explanation": "brief explanation including any column inferences made",
   "confidence": 0.85,
   "suggestions": ["optional suggestion 1", "optional suggestion 2"]
 }
@@ -208,6 +618,7 @@ export const explainSQL = async (
   }
 
   try {
+    // Use gemini-2.0-flash for explanations (faster, less critical)
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     const databaseContext = tables ? generateDatabaseContext({ tables }) : "";
@@ -250,6 +661,7 @@ export const suggestQueryImprovements = async (
   }
 
   try {
+    // Use gemini-2.0-flash for suggestions (faster, less critical)
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     const databaseContext = tables ? generateDatabaseContext({ tables }) : "";

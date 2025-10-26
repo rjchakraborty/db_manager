@@ -38,48 +38,12 @@ export async function POST(request: NextRequest) {
     console.log("🤖 Generated SQL:", response.sql);
     console.log("📊 AI Confidence:", response.confidence);
 
-    // Validate generated SQL against the live connection using EXPLAIN
-    let validationWarning: string | null = null;
-    const connectionId = context?.connectionId;
-
-    if (connectionId) {
-      try {
-        console.log("⏳ Validating SQL with EXPLAIN...");
-        await DatabaseService.executeQuery(
-          connectionId,
-          `EXPLAIN ${response.sql}`
-        );
-        console.log("✅ SQL validation passed");
-      } catch (e: unknown) {
-        const errorMessage = e instanceof Error ? e.message : "Unknown error";
-        console.warn("⚠️ SQL validation failed (non-fatal):", errorMessage);
-        console.warn("Generated SQL:", response.sql);
-
-        // If validation fails due to connection issues, just warn but continue
-        if (
-          errorMessage.includes("No configuration found") ||
-          errorMessage.includes("Failed to establish database connection")
-        ) {
-          validationWarning =
-            "Could not validate SQL (connection unavailable). Please review before executing.";
-        } else {
-          // For actual SQL errors, add them as suggestions
-          validationWarning = `SQL validation warning: ${errorMessage}`;
-          response.suggestions = [
-            ...(response.suggestions || []),
-            `Validation error: ${errorMessage}`,
-            "Please review and test the SQL before executing",
-          ];
-        }
-      }
-    } else {
-      console.log("⏭️ Skipping SQL validation (no connectionId provided)");
-      validationWarning = "SQL validation skipped (no active connection)";
-    }
+    // Note: SQL validation is disabled to avoid executing queries
+    // The user can review and test the generated SQL manually
 
     return NextResponse.json({
       response,
-      validationWarning,
+      validationWarning: null,
     });
   } catch (error: unknown) {
     console.error("AI query conversion error:", error);

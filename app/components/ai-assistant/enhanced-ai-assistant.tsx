@@ -325,6 +325,7 @@ export default function EnhancedAIAssistant({
               (t) => `${t.table_schema || currentSchema}."${t.table_name}"`
             ),
             tableNames: tables.map((t) => t.table_name), // Add simple table names list
+            selectedTable: selectedTable, // Pass the currently selected/opened table
           },
         }),
       });

@@ -25,7 +25,14 @@ interface TableViewerProps {
   tableName: string;
   table?: DatabaseTable;
   queryResult?: QueryResult | null;
-  onDataViewerOpen?: (data: unknown, columnName: string, dataType: string, tableName?: string, column?: DatabaseColumn, rowIndex?: number) => void;
+  onDataViewerOpen?: (
+    data: unknown,
+    columnName: string,
+    dataType: string,
+    tableName?: string,
+    column?: DatabaseColumn,
+    rowIndex?: number
+  ) => void;
 }
 
 export default function TableViewer({
@@ -45,14 +52,23 @@ export default function TableViewer({
   // Editing states (simplified - most editing now handled by DataViewer)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
-  const [dependencies, setDependencies] = useState<Array<{ table: string; column: string }>>([]);
+  const [dependencies, setDependencies] = useState<
+    Array<{ table: string; column: string }>
+  >([]);
   const [checkingDependencies, setCheckingDependencies] = useState(false);
 
+  // Store full query result data for client-side pagination
+  const [fullQueryData, setFullQueryData] = useState<QueryResult | null>(null);
 
   const rowsPerPage = 100;
 
   // Helper function to open data viewer
-  const handleCellClick = (data: unknown, columnName: string, column?: DatabaseColumn, rowIdx: number = -1) => {
+  const handleCellClick = (
+    data: unknown,
+    columnName: string,
+    column?: DatabaseColumn,
+    rowIdx: number = -1
+  ) => {
     if (onDataViewerOpen) {
       onDataViewerOpen(
         data,
@@ -65,113 +81,181 @@ export default function TableViewer({
     }
   };
 
+  const loadTableData = useCallback(
+    async (retryCount = 0) => {
+      if (!connectionId) return;
 
+      const maxRetries = 3;
 
-
-  const loadTableData = useCallback(async (retryCount = 0) => {
-    if (!connectionId) return;
-
-    const maxRetries = 3;
-
-    if (retryCount === 0) {
-      setLoading(true);
-      setError(null);
-    }
-
-    try {
-      const offset = (currentPage - 1) * rowsPerPage;
-      const query = `SELECT * FROM "${schema}"."${tableName}" LIMIT ${rowsPerPage} OFFSET ${offset}`;
-
-      const response = await fetch("/api/database/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connectionId, query }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || "Failed to fetch table data");
-      }
-
-      const { result } = await response.json();
-      setData(result);
-
-      // Clear any previous errors on success
-      if (error) {
+      if (retryCount === 0) {
+        setLoading(true);
         setError(null);
       }
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to load table data";
-      console.error(`Table data loading error (attempt ${retryCount + 1}):`, err);
 
-      // Retry with exponential backoff
-      if (retryCount < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
-        setTimeout(() => {
-          loadTableData(retryCount + 1);
-        }, delay);
-      } else {
-        // After all retries failed, show error
-        setError(`${errorMessage} (after ${maxRetries + 1} attempts)`);
+      try {
+        const offset = (currentPage - 1) * rowsPerPage;
+        const query = `SELECT * FROM "${schema}"."${tableName}" LIMIT ${rowsPerPage} OFFSET ${offset}`;
+
+        const response = await fetch("/api/database/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connectionId, query }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response
+            .json()
+            .catch(() => ({ error: "Unknown error" }));
+          throw new Error(errorData.error || "Failed to fetch table data");
+        }
+
+        const { result } = await response.json();
+        setData(result);
+
+        // Clear any previous errors on success
+        if (error) {
+          setError(null);
+        }
+      } catch (err: unknown) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Failed to load table data";
+        console.error(
+          `Table data loading error (attempt ${retryCount + 1}):`,
+          err
+        );
+
+        // Retry with exponential backoff
+        if (retryCount < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+          setTimeout(() => {
+            loadTableData(retryCount + 1);
+          }, delay);
+        } else {
+          // After all retries failed, show error
+          setError(`${errorMessage} (after ${maxRetries + 1} attempts)`);
+        }
+      } finally {
+        if (retryCount === 0) {
+          setLoading(false);
+        }
       }
-    } finally {
-      if (retryCount === 0) {
-        setLoading(false);
+    },
+    [connectionId, schema, tableName, currentPage, error]
+  );
+
+  const loadRowCount = useCallback(
+    async (retryCount = 0) => {
+      if (!connectionId) return;
+
+      const maxRetries = 3;
+
+      try {
+        const query = `SELECT COUNT(*) as count FROM "${schema}"."${tableName}"`;
+
+        const response = await fetch("/api/database/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connectionId, query }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response
+            .json()
+            .catch(() => ({ error: "Unknown error" }));
+          throw new Error(errorData.error || "Failed to fetch row count");
+        }
+
+        const { result } = await response.json();
+        setTotalRows(parseInt(result.rows[0].count) || 0);
+      } catch (err: unknown) {
+        console.error(
+          `Row count loading error (attempt ${retryCount + 1}):`,
+          err
+        );
+
+        // Retry with exponential backoff
+        if (retryCount < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+          setTimeout(() => {
+            loadRowCount(retryCount + 1);
+          }, delay);
+        } else {
+          // After all retries failed, set a default count
+          console.warn(
+            `Failed to load row count after ${
+              maxRetries + 1
+            } attempts, using fallback`
+          );
+          setTotalRows(0);
+        }
       }
-    }
-  }, [connectionId, schema, tableName, currentPage, error]);
+    },
+    [connectionId, schema, tableName]
+  );
 
-  const loadRowCount = useCallback(async (retryCount = 0) => {
-    if (!connectionId) return;
-
-    const maxRetries = 3;
-
-    try {
-      const query = `SELECT COUNT(*) as count FROM "${schema}"."${tableName}"`;
-
-      const response = await fetch("/api/database/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connectionId, query }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || "Failed to fetch row count");
-      }
-
-      const { result } = await response.json();
-      setTotalRows(parseInt(result.rows[0].count) || 0);
-    } catch (err: unknown) {
-      console.error(`Row count loading error (attempt ${retryCount + 1}):`, err);
-
-      // Retry with exponential backoff
-      if (retryCount < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
-        setTimeout(() => {
-          loadRowCount(retryCount + 1);
-        }, delay);
-      } else {
-        // After all retries failed, set a default count
-        console.warn(`Failed to load row count after ${maxRetries + 1} attempts, using fallback`);
-        setTotalRows(0);
-      }
-    }
-  }, [connectionId, schema, tableName]);
-
-
+  // Handle query results with client-side pagination
   useEffect(() => {
     if (queryResult) {
-      // Use query result data
-      setData(queryResult);
-      setTotalRows(queryResult.rowCount);
+      // Reset to first page when new query results arrive
+      setCurrentPage(1);
+
+      // Store full query result for client-side pagination
+      setFullQueryData(queryResult);
+
+      // Calculate paginated data for first page
+      const startIndex = 0;
+      const endIndex = rowsPerPage;
+      const paginatedRows = queryResult.rows.slice(startIndex, endIndex);
+
+      // Create paginated result
+      const paginatedResult: QueryResult = {
+        ...queryResult,
+        rows: paginatedRows,
+        rowCount: paginatedRows.length,
+      };
+
+      setData(paginatedResult);
+      setTotalRows(queryResult.rows.length);
       setError(null);
-    } else if (connectionId && schema && tableName) {
-      // Load table data
+    }
+    // Only run when queryResult changes, NOT on page changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryResult]);
+
+  // Handle table data loading with server-side pagination
+  useEffect(() => {
+    if (!queryResult && connectionId && schema && tableName) {
+      // Clear query data when switching to table view
+      setFullQueryData(null);
       loadTableData();
       loadRowCount();
     }
-  }, [connectionId, schema, tableName, currentPage, queryResult, loadTableData, loadRowCount]);
+  }, [
+    connectionId,
+    schema,
+    tableName,
+    queryResult,
+    currentPage,
+    loadTableData,
+    loadRowCount,
+  ]);
+
+  // Handle page changes for client-side pagination (query results)
+  useEffect(() => {
+    if (fullQueryData && currentPage > 1) {
+      const startIndex = (currentPage - 1) * rowsPerPage;
+      const endIndex = startIndex + rowsPerPage;
+      const paginatedRows = fullQueryData.rows.slice(startIndex, endIndex);
+
+      const paginatedResult: QueryResult = {
+        ...fullQueryData,
+        rows: paginatedRows,
+        rowCount: paginatedRows.length,
+      };
+
+      setData(paginatedResult);
+    }
+  }, [currentPage, fullQueryData]);
 
   const handleRefresh = () => {
     loadTableData();
@@ -183,13 +267,15 @@ export default function TableViewer({
 
   // Helper functions for editing
   const getPrimaryKeyColumns = (): DatabaseColumn[] => {
-    return table?.columns.filter(col => col.is_primary_key) || [];
+    return table?.columns.filter((col) => col.is_primary_key) || [];
   };
 
-  const getPrimaryKeyValue = (row: Record<string, unknown>): Record<string, unknown> => {
+  const getPrimaryKeyValue = (
+    row: Record<string, unknown>
+  ): Record<string, unknown> => {
     const pkColumns = getPrimaryKeyColumns();
     const pkValue: Record<string, unknown> = {};
-    pkColumns.forEach(col => {
+    pkColumns.forEach((col) => {
       pkValue[col.column_name] = row[col.column_name];
     });
     return pkValue;
@@ -228,7 +314,6 @@ export default function TableViewer({
   //   return null;
   // };
 
-
   const checkDependencies = async (rowIndex: number) => {
     if (!connectionId || !data || !table) return;
 
@@ -244,7 +329,7 @@ export default function TableViewer({
           connectionId,
           schema,
           tableName,
-          primaryKey
+          primaryKey,
         }),
       });
 
@@ -255,7 +340,6 @@ export default function TableViewer({
       const result = await response.json();
       setDependencies(result.dependencies || []);
       setConfirmDelete(rowIndex);
-
     } catch (error: unknown) {
       console.error("Dependency check error:", error);
       // Still allow deletion attempt, but without dependency info
@@ -274,24 +358,43 @@ export default function TableViewer({
       const jsonData: Record<string, unknown> = {};
 
       // Process each field with proper type conversion
-      data.fields.forEach(field => {
-        const column = table.columns.find(col => col.column_name === field.name);
+      data.fields.forEach((field) => {
+        const column = table.columns.find(
+          (col) => col.column_name === field.name
+        );
         const value = row[field.name];
 
         if (value === null || value === undefined) {
           jsonData[field.name] = null;
         } else if (column) {
           // Convert based on database column type
-          if (column.data_type.includes('json') || column.data_type.includes('jsonb')) {
+          if (
+            column.data_type.includes("json") ||
+            column.data_type.includes("jsonb")
+          ) {
             // Already JSON, parse if it's a string
-            jsonData[field.name] = typeof value === 'string' ? JSON.parse(value) : value;
-          } else if (column.data_type.includes('boolean')) {
+            jsonData[field.name] =
+              typeof value === "string" ? JSON.parse(value) : value;
+          } else if (column.data_type.includes("boolean")) {
             jsonData[field.name] = Boolean(value);
-          } else if (column.data_type.includes('integer') || column.data_type.includes('bigint') || column.data_type.includes('smallint')) {
+          } else if (
+            column.data_type.includes("integer") ||
+            column.data_type.includes("bigint") ||
+            column.data_type.includes("smallint")
+          ) {
             jsonData[field.name] = parseInt(String(value));
-          } else if (column.data_type.includes('numeric') || column.data_type.includes('decimal') || column.data_type.includes('real') || column.data_type.includes('double')) {
+          } else if (
+            column.data_type.includes("numeric") ||
+            column.data_type.includes("decimal") ||
+            column.data_type.includes("real") ||
+            column.data_type.includes("double")
+          ) {
             jsonData[field.name] = parseFloat(String(value));
-          } else if (column.data_type.includes('timestamp') || column.data_type.includes('date') || column.data_type.includes('time')) {
+          } else if (
+            column.data_type.includes("timestamp") ||
+            column.data_type.includes("date") ||
+            column.data_type.includes("time")
+          ) {
             jsonData[field.name] = new Date(String(value)).toISOString();
           } else {
             // Default to string for text, varchar, etc.
@@ -310,10 +413,10 @@ export default function TableViewer({
       copyToClipboard(formattedJSON);
 
       // Show success feedback (you could replace this with a toast notification)
-      console.log('Row copied as JSON:', formattedJSON);
-
+      console.log("Row copied as JSON:", formattedJSON);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to copy row as JSON";
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to copy row as JSON";
       console.error("JSON copy error:", error);
       alert(`Failed to copy row as JSON: ${errorMessage}`);
     }
@@ -336,7 +439,7 @@ export default function TableViewer({
           connectionId,
           schema,
           tableName,
-          primaryKey
+          primaryKey,
         }),
       });
 
@@ -344,7 +447,7 @@ export default function TableViewer({
         const errorData = await response.json();
 
         // Handle foreign key constraint violations with better UI
-        if (errorData.errorType === 'FOREIGN_KEY_VIOLATION') {
+        if (errorData.errorType === "FOREIGN_KEY_VIOLATION") {
           const message = `${errorData.error}\n\n${errorData.suggestion}`;
           alert(message);
         } else {
@@ -359,10 +462,10 @@ export default function TableViewer({
       setDependencies([]);
 
       const result = await response.json();
-      console.log('Delete successful:', result.message);
-
+      console.log("Delete successful:", result.message);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to delete row";
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to delete row";
       console.error("Delete error:", error);
       alert(`Failed to delete row: ${errorMessage}`);
     } finally {
@@ -371,11 +474,14 @@ export default function TableViewer({
   };
 
   const handleCopyData = () => {
-    if (data) {
+    // Use fullQueryData if available (all query results), otherwise use current data (current page)
+    const dataToExport = fullQueryData || data;
+
+    if (dataToExport) {
       const csvContent = [
-        data.fields.map((f) => f.name).join(","),
-        ...data.rows.map((row) =>
-          data.fields
+        dataToExport.fields.map((f) => f.name).join(","),
+        ...dataToExport.rows.map((row) =>
+          dataToExport.fields
             .map((f) => {
               const value = row[f.name];
               return typeof value === "string" ? `"${value}"` : value;
@@ -388,11 +494,14 @@ export default function TableViewer({
   };
 
   const handleDownloadData = () => {
-    if (data) {
+    // Use fullQueryData if available (all query results), otherwise use current data (current page)
+    const dataToExport = fullQueryData || data;
+
+    if (dataToExport) {
       const csvContent = [
-        data.fields.map((f) => f.name).join(","),
-        ...data.rows.map((row) =>
-          data.fields
+        dataToExport.fields.map((f) => f.name).join(","),
+        ...dataToExport.rows.map((row) =>
+          dataToExport.fields
             .map((f) => {
               const value = row[f.name];
               return typeof value === "string" ? `"${value}"` : value;
@@ -405,11 +514,13 @@ export default function TableViewer({
         .toISOString()
         .slice(0, 19)
         .replace(/:/g, "-");
-      downloadAsFile(
-        csvContent,
-        `${schema}_${tableName}_${timestamp}.csv`,
-        "text/csv"
-      );
+
+      // Add indicator if exporting partial data (current page only)
+      const filename = fullQueryData
+        ? `${schema}_${tableName}_${timestamp}.csv`
+        : `${schema}_${tableName}_page${currentPage}_${timestamp}.csv`;
+
+      downloadAsFile(csvContent, filename, "text/csv");
     }
   };
 
@@ -444,7 +555,10 @@ export default function TableViewer({
                       <Trash2 className="h-4 w-4 mr-2 text-red-600" />
                       <span className="text-red-800 font-medium">
                         {dependencies.length > 0 ? (
-                          <>⚠️ Referenced by {dependencies.length} table{dependencies.length !== 1 ? 's' : ''}</>
+                          <>
+                            ⚠️ Referenced by {dependencies.length} table
+                            {dependencies.length !== 1 ? "s" : ""}
+                          </>
                         ) : (
                           <>Confirm deletion</>
                         )}
@@ -453,12 +567,18 @@ export default function TableViewer({
 
                     <div className="flex items-center space-x-2">
                       <Button
-                        onClick={() => confirmDelete !== null && deleteRow(confirmDelete)}
+                        onClick={() =>
+                          confirmDelete !== null && deleteRow(confirmDelete)
+                        }
                         disabled={updating}
                         size="sm"
-                        className={`${dependencies.length > 0 ? 'bg-orange-600 hover:bg-orange-700' : 'bg-red-600 hover:bg-red-700'} text-white`}>
+                        className={`${
+                          dependencies.length > 0
+                            ? "bg-orange-600 hover:bg-orange-700"
+                            : "bg-red-600 hover:bg-red-700"
+                        } text-white`}>
                         <Trash2 className="h-4 w-4 mr-1" />
-                        {dependencies.length > 0 ? 'Force Delete' : 'Delete'}
+                        {dependencies.length > 0 ? "Force Delete" : "Delete"}
                       </Button>
 
                       <Button
@@ -496,23 +616,32 @@ export default function TableViewer({
               onClick={handleCopyData}
               variant="outline"
               size="sm"
-              disabled={!data || confirmDelete !== null}>
+              disabled={!data || confirmDelete !== null}
+              title={
+                fullQueryData
+                  ? `Copy all ${totalRows} rows`
+                  : `Copy current page (${data?.rows.length || 0} rows)`
+              }>
               <Copy className="h-4 w-4 mr-1" />
-              Copy
+              Copy {fullQueryData ? `All` : `Page`}
             </Button>
 
             <Button
               onClick={handleDownloadData}
               variant="outline"
               size="sm"
-              disabled={!data || confirmDelete !== null}>
+              disabled={!data || confirmDelete !== null}
+              title={
+                fullQueryData
+                  ? `Export all ${totalRows} rows to CSV`
+                  : `Export current page (${data?.rows.length || 0} rows)`
+              }>
               <Download className="h-4 w-4 mr-1" />
-              Export
+              Export {fullQueryData ? `All` : `Page`}
             </Button>
           </div>
         </div>
       </div>
-
 
       {/* Data Content */}
       <div className="flex-1 flex flex-col">
@@ -532,13 +661,18 @@ export default function TableViewer({
           </div>
         ) : data ? (
           <>
-            {/* Pagination Controls - Only for table data, not query results */}
-            {!queryResult && (
+            {/* Pagination Controls - Show for all data with pagination */}
+            {totalRows > rowsPerPage && (
               <div className="flex items-center justify-between p-3 border-b border-gray-200">
                 <div className="text-sm text-black">
                   Showing {(currentPage - 1) * rowsPerPage + 1} to{" "}
                   {Math.min(currentPage * rowsPerPage, totalRows)} of{" "}
                   {formatNumber(totalRows)} rows
+                  {queryResult && (
+                    <span className="ml-2 text-gray-500">
+                      (client-side pagination)
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-2">
@@ -579,25 +713,33 @@ export default function TableViewer({
                   <table className="w-full min-w-max table-auto">
                     <thead className="bg-white border-b-2 border-black sticky top-0 z-10">
                       <tr>
-                        {data && data.fields.map((field) => (
-                          <th
-                            key={field.name}
-                            className="px-4 py-3 text-left text-xs font-medium text-black tracking-wider border-b border-gray-400 whitespace-nowrap min-w-[120px] bg-white">
-                            <div className="flex items-center">
-                              {field.name}
-                              {table && table.columns.find(col => col.column_name === field.name) && (
-                                <div className="ml-2 flex space-x-1">
-                                  {table.columns.find(col => col.column_name === field.name)?.is_primary_key && (
-                                    <Key className="h-3 w-3 text-black" />
+                        {data &&
+                          data.fields.map((field) => (
+                            <th
+                              key={field.name}
+                              className="px-4 py-3 text-left text-xs font-medium text-black tracking-wider border-b border-gray-400 whitespace-nowrap min-w-[120px] bg-white">
+                              <div className="flex items-center">
+                                {field.name}
+                                {table &&
+                                  table.columns.find(
+                                    (col) => col.column_name === field.name
+                                  ) && (
+                                    <div className="ml-2 flex space-x-1">
+                                      {table.columns.find(
+                                        (col) => col.column_name === field.name
+                                      )?.is_primary_key && (
+                                        <Key className="h-3 w-3 text-black" />
+                                      )}
+                                      {table.columns.find(
+                                        (col) => col.column_name === field.name
+                                      )?.is_foreign_key && (
+                                        <Link className="h-3 w-3 text-black" />
+                                      )}
+                                    </div>
                                   )}
-                                  {table.columns.find(col => col.column_name === field.name)?.is_foreign_key && (
-                                    <Link className="h-3 w-3 text-black" />
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </th>
-                        ))}
+                              </div>
+                            </th>
+                          ))}
                         {/* Actions column for non-query results - moved to right and made sticky */}
                         {!queryResult && connectionId && (
                           <th className="px-4 py-3 text-center text-xs font-medium text-black tracking-wider border-b border-gray-400 whitespace-nowrap min-w-[100px] bg-white sticky right-0 border-l border-gray-300">
@@ -607,80 +749,94 @@ export default function TableViewer({
                       </tr>
                     </thead>
                     <tbody className="bg-white">
-                      {data && data.rows.map((row, rowIndex) => {
-                        return (
-                          <tr
-                            key={rowIndex}
-                            className={`
+                      {data &&
+                        data.rows.map((row, rowIndex) => {
+                          return (
+                            <tr
+                              key={rowIndex}
+                              className={`
                               ${rowIndex % 2 === 0 ? "bg-white" : "bg-gray-50"}
                               ${confirmDelete === rowIndex ? "bg-red-100" : ""}
                             `}>
+                              {data &&
+                                data.fields.map((field) => {
+                                  const column = table?.columns.find(
+                                    (col) => col.column_name === field.name
+                                  );
 
-                            {data && data.fields.map((field) => {
-                              const column = table?.columns.find(col => col.column_name === field.name);
+                                  return (
+                                    <td
+                                      key={field.name}
+                                      className={`px-4 py-3 text-sm border-b border-gray-200 min-w-[120px] max-w-[400px] cursor-pointer hover:bg-gray-100 ${
+                                        column?.is_primary_key
+                                          ? "bg-gray-50"
+                                          : ""
+                                      }`}
+                                      onClick={() => {
+                                        handleCellClick(
+                                          row[field.name],
+                                          field.name,
+                                          column,
+                                          rowIndex
+                                        );
+                                      }}
+                                      title={String(row[field.name])}>
+                                      <div className="truncate">
+                                        {row[field.name] === null ? (
+                                          <span className="text-gray-600 italic">
+                                            NULL
+                                          </span>
+                                        ) : (
+                                          String(row[field.name])
+                                        )}
+                                      </div>
+                                    </td>
+                                  );
+                                })}
 
-                              return (
-                                <td
-                                  key={field.name}
-                                  className={`px-4 py-3 text-sm border-b border-gray-200 min-w-[120px] max-w-[400px] cursor-pointer hover:bg-gray-100 ${column?.is_primary_key ? "bg-gray-50" : ""}`}
-                                  onClick={() => {
-                                    handleCellClick(
-                                      row[field.name],
-                                      field.name,
-                                      column,
-                                      rowIndex
-                                    );
-                                  }}
-                                  title={String(row[field.name])}>
+                              {/* Sticky actions column for non-query results */}
+                              {!queryResult && connectionId && (
+                                <td className="px-2 py-3 text-center border-b border-gray-200 min-w-[100px] sticky right-0 bg-inherit border-l border-gray-300">
+                                  <div className="flex items-center justify-center space-x-1">
+                                    {/* Copy as JSON button */}
+                                    <button
+                                      onClick={() => copyRowAsJSON(rowIndex)}
+                                      disabled={
+                                        updating || confirmDelete !== null
+                                      }
+                                      className="p-1 text-gray-400 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title="Copy row as JSON">
+                                      <FileJson className="h-4 w-4" />
+                                    </button>
 
-                                  <div className="truncate">
-                                    {row[field.name] === null ? (
-                                      <span className="text-gray-600 italic">
-                                        NULL
-                                      </span>
-                                    ) : (
-                                      String(row[field.name])
-                                    )}
+                                    {/* Delete button */}
+                                    <button
+                                      onClick={() =>
+                                        checkDependencies(rowIndex)
+                                      }
+                                      disabled={
+                                        updating ||
+                                        confirmDelete !== null ||
+                                        checkingDependencies
+                                      }
+                                      className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title={
+                                        checkingDependencies
+                                          ? "Checking dependencies..."
+                                          : "Delete row"
+                                      }>
+                                      {checkingDependencies ? (
+                                        <RefreshCw className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <Trash2 className="h-4 w-4" />
+                                      )}
+                                    </button>
                                   </div>
                                 </td>
-                              );
-                            })}
-
-                            {/* Sticky actions column for non-query results */}
-                            {!queryResult && connectionId && (
-                              <td className="px-2 py-3 text-center border-b border-gray-200 min-w-[100px] sticky right-0 bg-inherit border-l border-gray-300">
-                                <div className="flex items-center justify-center space-x-1">
-                                  {/* Copy as JSON button */}
-                                  <button
-                                    onClick={() => copyRowAsJSON(rowIndex)}
-                                    disabled={updating || confirmDelete !== null}
-                                    className="p-1 text-gray-400 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title="Copy row as JSON">
-                                    <FileJson className="h-4 w-4" />
-                                  </button>
-
-                                  {/* Delete button */}
-                                  <button
-                                    onClick={() => checkDependencies(rowIndex)}
-                                    disabled={updating || confirmDelete !== null || checkingDependencies}
-                                    className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={
-                                      checkingDependencies
-                                        ? "Checking dependencies..."
-                                        : "Delete row"
-                                    }>
-                                    {checkingDependencies ? (
-                                      <RefreshCw className="h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <Trash2 className="h-4 w-4" />
-                                    )}
-                                  </button>
-                                </div>
-                              </td>
-                            )}
-                          </tr>
-                        );
-                      })}
+                              )}
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
@@ -706,7 +862,6 @@ export default function TableViewer({
           </div>
         )}
       </div>
-
     </div>
   );
 }
