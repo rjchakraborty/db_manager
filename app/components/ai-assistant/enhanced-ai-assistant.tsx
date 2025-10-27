@@ -498,7 +498,7 @@ export default function EnhancedAIAssistant({
 
           <div className="flex-1 min-h-0">
             <Editor
-              height="160px"
+              height="100%"
               defaultLanguage="sql"
               value={sqlQuery}
               onChange={(value) => setSqlQuery(value || "")}
