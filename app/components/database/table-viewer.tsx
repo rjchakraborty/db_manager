@@ -218,8 +218,6 @@ export default function TableViewer({
       setTotalRows(queryResult.rows.length);
       setError(null);
     }
-    // Only run when queryResult changes, NOT on page changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryResult]);
 
   // Handle table data loading with server-side pagination

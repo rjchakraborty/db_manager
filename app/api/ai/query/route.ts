@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { initializeGemini, convertNaturalLanguageToSQL } from "@/lib/gemini";
 import { AIQueryRequest } from "@/types/database";
-import { DatabaseService } from "@/lib/database";
 
 export async function POST(request: NextRequest) {
   try {

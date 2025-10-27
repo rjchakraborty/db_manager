@@ -25,7 +25,6 @@ export default function EnhancedAIAssistant({
   tables,
   currentSchema,
   onQueryExecute,
-  fullSchema,
   selectedTable,
 }: EnhancedAIAssistantProps) {
   const [naturalLanguage, setNaturalLanguage] = useState("");

@@ -387,7 +387,7 @@ export default function Home() {
     setQueryResult(result);
 
     // Auto-save successful query to history (fire and forget)
-    saveQueryToHistory(query, result).catch((err) => {
+    saveQueryToHistory(query).catch((err) => {
       console.error("Failed to save query to history:", err);
     });
 
@@ -395,7 +395,7 @@ export default function Home() {
   };
 
   // Helper function to save query to history
-  const saveQueryToHistory = async (query: string, result: QueryResult) => {
+  const saveQueryToHistory = async (query: string) => {
     try {
       // Only save SELECT queries (not mutations)
       const normalizedQuery = query.trim().toUpperCase();
