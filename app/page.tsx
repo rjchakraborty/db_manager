@@ -36,6 +36,7 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
   const [isLoadingSchema, setIsLoadingSchema] = useState(false);
+  const [tableRefreshTrigger, setTableRefreshTrigger] = useState(0);
   const [schemaCache, setSchemaCache] = useState<
     Map<
       string,
@@ -565,16 +566,18 @@ export default function Home() {
       const table = availableTables.find(
         (t) => t.table_name === selectedTable.table
       );
-      const primaryKeyColumn = table?.columns.find((col) => col.is_primary_key);
+      const primaryKeyColumns =
+        table?.columns.filter((col) => col.is_primary_key) || [];
 
-      if (!primaryKeyColumn) {
+      if (primaryKeyColumns.length === 0) {
         throw new Error("Cannot update row: no primary key found");
       }
 
-      const primaryKey = {
-        column: primaryKeyColumn.column_name,
-        value: row[primaryKeyColumn.column_name],
-      };
+      // Build primary key object with column_name: value pairs
+      const primaryKey: Record<string, unknown> = {};
+      primaryKeyColumns.forEach((pkCol) => {
+        primaryKey[pkCol.column_name] = row[pkCol.column_name];
+      });
 
       // Update the row
       const response = await fetch("/api/database/update-row", {
@@ -595,6 +598,9 @@ export default function Home() {
       }
 
       console.log("DataViewer save successful");
+
+      // Trigger table refresh after successful update
+      setTableRefreshTrigger((prev) => prev + 1);
     } catch (error) {
       console.error("DataViewer save error:", error);
       throw error;
@@ -719,6 +725,7 @@ export default function Home() {
                   }
                   queryResult={queryResult}
                   onDataViewerOpen={openDataViewer}
+                  refreshTrigger={tableRefreshTrigger}
                 />
               ) : (
                 <div className="flex-1 flex items-center justify-center text-gray-500">

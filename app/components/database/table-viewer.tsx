@@ -33,6 +33,7 @@ interface TableViewerProps {
     column?: DatabaseColumn,
     rowIndex?: number
   ) => void;
+  refreshTrigger?: number;
 }
 
 export default function TableViewer({
@@ -42,6 +43,7 @@ export default function TableViewer({
   table,
   queryResult,
   onDataViewerOpen,
+  refreshTrigger,
 }: TableViewerProps) {
   const [data, setData] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -254,6 +256,14 @@ export default function TableViewer({
       setData(paginatedResult);
     }
   }, [currentPage, fullQueryData]);
+
+  // Watch for refresh trigger changes from parent
+  useEffect(() => {
+    if (refreshTrigger && refreshTrigger > 0) {
+      handleRefresh();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTrigger]);
 
   const handleRefresh = () => {
     loadTableData();
