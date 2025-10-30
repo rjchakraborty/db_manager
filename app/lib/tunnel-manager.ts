@@ -12,7 +12,9 @@ export interface TunnelConfig {
   remotePort: number;
   sshHost: string;
   sshUser: string;
-  privateKey: string;
+  privateKey?: string; // Optional for backward compatibility
+  keyFile?: string; // Path to SSH key file
+  password?: string; // SSH password for authentication
   isActive: boolean;
 }
 
@@ -45,16 +47,9 @@ class TunnelManager {
     return TunnelManager.instance;
   }
 
-  async startTunnel(config: TunnelConfig): Promise<TunnelStatus> {
-    const {
-      id,
-      localPort,
-      remoteHost,
-      remotePort,
-      sshHost,
-      sshUser,
-      privateKey,
-    } = config;
+  async startRDSTunnel(): Promise<TunnelStatus> {
+    const id = "default-rds-tunnel";
+    const localPort = 5432;
 
     // Check if tunnel is already running
     if (this.tunnels.has(id) && this.isProcessAlive(this.tunnels.get(id)!)) {
@@ -68,19 +63,179 @@ class TunnelManager {
     await this.killProcessOnPort(localPort);
 
     try {
-      // Create temporary key file
-      const keyFile = await this.createTempKeyFile(privateKey);
-      this.keyFiles.set(id, keyFile);
+      const sshKeyPath = "/Users/rj/.ssh/rds_tunnel_piston";
+
+      // Check if SSH key exists
+      try {
+        await fs.access(sshKeyPath);
+      } catch {
+        throw new Error(`SSH key not found at ${sshKeyPath}`);
+      }
 
       // Set correct permissions on key file
-      await fs.chmod(keyFile, 0o600);
+      await fs.chmod(sshKeyPath, 0o600);
+
+      // Use the external script that handles terminal interaction properly
+      const scriptPath = join(process.cwd(), "start-tunnel.sh");
+      console.log(`🚀 Starting SSH tunnel using script: ${scriptPath}`);
+
+      // Start SSH tunnel using the shell script
+      const tunnelProcess = spawn("bash", [scriptPath], {
+        stdio: ["inherit", "pipe", "pipe"], // Inherit stdin for password prompts, pipe stdout/stderr for monitoring
+        detached: false, // Keep attached so password prompts work in terminal
+      });
+
+      console.log(
+        `📝 SSH tunnel process started with PID: ${tunnelProcess.pid}`
+      );
+
+      // Store the process
+      this.tunnels.set(id, tunnelProcess);
+
+      const status: TunnelStatus = {
+        id,
+        isActive: false,
+        localPort,
+        pid: tunnelProcess.pid,
+        startedAt: new Date(),
+      };
+
+      let processCompleted = false;
+
+      // Handle process events
+      tunnelProcess.on("error", (error) => {
+        console.error(`RDS tunnel error for ${id}:`, error);
+        status.isActive = false;
+        status.error = error.message;
+        this.statuses.set(id, status);
+        this.cleanup(id);
+      });
+
+      tunnelProcess.on("exit", async (code, signal) => {
+        console.log(
+          `RDS tunnel expect process ${id} exited with code ${code}, signal ${signal}`
+        );
+        processCompleted = true;
+
+        if (code === 1) {
+          status.isActive = false;
+          status.error = "Authentication failed - incorrect passphrase";
+          this.statuses.set(id, status);
+        } else if (code === 2) {
+          status.isActive = false;
+          status.error = "Connection refused - check network connectivity";
+          this.statuses.set(id, status);
+        } else if (code === 3) {
+          status.isActive = false;
+          status.error = "Connection timeout - check network and host";
+          this.statuses.set(id, status);
+        }
+        // Don't set success status here, let the port check determine it
+      });
+
+      // Capture output for debugging
+      tunnelProcess.stdout?.on("data", (data) => {
+        const message = data.toString();
+        console.log(`RDS tunnel ${id} expect stdout:`, message);
+      });
+
+      tunnelProcess.stderr?.on("data", (data) => {
+        const message = data.toString();
+        console.log(`RDS tunnel ${id} expect stderr:`, message);
+      });
+
+      // Wait for the expect process to complete and tunnel to establish
+      const maxWaitTime = 15000; // 15 seconds
+      const checkInterval = 1000; // 1 second
+      let waited = 0;
+
+      while (waited < maxWaitTime) {
+        await new Promise((resolve) => setTimeout(resolve, checkInterval));
+        waited += checkInterval;
+
+        // Check if tunnel is active
+        const isPortActive = await this.checkPortListening(localPort);
+        if (isPortActive) {
+          status.isActive = true;
+          status.error = undefined;
+          this.statuses.set(id, status);
+          return status;
+        }
+
+        // If expect process completed with error, break early
+        if (processCompleted && status.error) {
+          break;
+        }
+      }
+
+      // Final check if we timed out
+      if (!status.isActive && !status.error) {
+        status.error =
+          "Tunnel connection timeout - please verify your passphrase and network connectivity";
+      }
+
+      this.statuses.set(id, status);
+      return status;
+    } catch (error) {
+      const status: TunnelStatus = {
+        id,
+        isActive: false,
+        localPort,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+      this.statuses.set(id, status);
+      return status;
+    }
+  }
+
+  async startTunnel(config: TunnelConfig): Promise<TunnelStatus> {
+    const {
+      id,
+      localPort,
+      remoteHost,
+      remotePort,
+      sshHost,
+      sshUser,
+      privateKey,
+    } = config;
+
+    // For the default RDS tunnel, use the specialized RDS tunnel method
+    if (id === "default-rds-tunnel") {
+      return this.startRDSTunnel();
+    }
+
+    // Check if tunnel is already running
+    if (this.tunnels.has(id) && this.isProcessAlive(this.tunnels.get(id)!)) {
+      const status = this.statuses.get(id);
+      if (status) {
+        return status;
+      }
+    }
+
+    // Kill any existing process using the local port
+    await this.killProcessOnPort(localPort);
+
+    try {
+      let sshKeyFile: string;
+
+      if (privateKey) {
+        // Create temporary key file from provided privateKey
+        sshKeyFile = await this.createTempKeyFile(privateKey);
+        this.keyFiles.set(id, sshKeyFile);
+        // Set correct permissions on key file
+        await fs.chmod(sshKeyFile, 0o600);
+      } else {
+        throw new Error(
+          "privateKey is required for generic tunnel configuration"
+        );
+      }
 
       // Start SSH tunnel
       const sshProcess = spawn(
         "ssh",
         [
           "-i",
-          keyFile,
+          sshKeyFile,
           "-o",
           "StrictHostKeyChecking=no",
           "-o",
@@ -450,19 +605,22 @@ function parseTunnelConfigFromScript(): Omit<TunnelConfig, "id"> {
     const [, localPort, remoteHost, remotePort, sshUser, sshHost] =
       sshCommandMatch;
 
-    // Extract private key from the script
-    const keyStartMatch = scriptContent.match(
-      /-----BEGIN RSA PRIVATE KEY-----/
-    );
-    const keyEndMatch = scriptContent.match(/-----END RSA PRIVATE KEY-----/);
+    // Extract SSH key path from the script
+    const keyPathMatch = scriptContent.match(/SSH_KEY_PATH="([^"]+)"/);
 
-    if (!keyStartMatch || !keyEndMatch) {
-      throw new Error("Could not extract private key from script");
+    if (!keyPathMatch) {
+      throw new Error("Could not extract SSH key path from script");
     }
 
-    const keyStart = keyStartMatch.index!;
-    const keyEnd = keyEndMatch.index! + keyEndMatch[0].length;
-    const privateKey = scriptContent.substring(keyStart, keyEnd);
+    const sshKeyPath = keyPathMatch[1];
+
+    // Read the SSH key file
+    let privateKey = "";
+    try {
+      privateKey = readFileSync(sshKeyPath, "utf-8");
+    } catch (error) {
+      throw new Error(`Could not read SSH key from ${sshKeyPath}: ${error}`);
+    }
 
     return {
       name: "PistonPay Production RDS",
@@ -477,7 +635,7 @@ function parseTunnelConfigFromScript(): Omit<TunnelConfig, "id"> {
   } catch (error) {
     console.error("Failed to parse tunnel config from script:", error);
     throw new Error(
-      "Could not load tunnel configuration from rds_tunnel.sh. Please ensure the script file exists and is properly formatted."
+      "Could not load tunnel configuration from rds_tunnel.sh. Please ensure the script file exists and the SSH key is available."
     );
   }
 }

@@ -1,0 +1,31 @@
+#!/usr/bin/expect -f
+# Test script to verify expect functionality with SSH key passphrase
+set timeout 30
+
+# Test with a passphrase (you'll need to replace "your_passphrase_here" with actual passphrase)
+set passphrase "your_passphrase_here"
+
+spawn ssh -i /Users/rj/.ssh/rds_tunnel_piston -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -f -N -L 5432:pistonpay-production.cluster-clqgisc6055w.us-west-1.rds.amazonaws.com:5432 rj@13.57.251.189
+
+expect {
+    "Enter passphrase for key" { 
+        send "$passphrase\r"
+        exp_continue
+    }
+    "Permission denied" {
+        puts "Authentication failed"
+        exit 1
+    }
+    "Connection refused" {
+        puts "Connection refused"
+        exit 2
+    }
+    timeout {
+        puts "Connection timeout"
+        exit 3
+    }
+    eof {
+        puts "Connection established"
+        exit 0
+    }
+}

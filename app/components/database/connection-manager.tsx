@@ -76,6 +76,9 @@ export default function ConnectionManager({
   >(new Map());
   const [startingTunnel, setStartingTunnel] = useState<string | null>(null);
   const [tunnelConfig, setTunnelConfig] = useState<TunnelConfig | null>(null);
+  const [showPassphraseDialog, setShowPassphraseDialog] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [passphraseError, setPassphraseError] = useState("");
 
   // Load connections from secure storage
   useEffect(() => {
@@ -107,9 +110,34 @@ export default function ConnectionManager({
       const stored = secureStorage.get<DatabaseConnection[]>(
         CONNECTIONS_STORAGE_KEY
       );
-      if (stored) {
-        setConnections(stored);
+      
+      let currentConnections = stored || [];
+      
+      // Auto-add default RDS connection if it doesn't exist
+      const hasRDSConnection = currentConnections.some(
+        conn => conn.tunnelId === "default-rds-tunnel"
+      );
+      
+      if (!hasRDSConnection) {
+        const rdsConnection: DatabaseConnection = {
+          id: generateId(),
+          name: "PistonPay Production RDS",
+          host: "localhost",
+          port: 5432,
+          database: "pistonpay_production",
+          username: "piston_fleet_admin",
+          password: "", // User will need to fill this
+          ssl: false,
+          requiresTunnel: true,
+          tunnelId: "default-rds-tunnel",
+          createdAt: new Date()
+        };
+        
+        currentConnections = [rdsConnection, ...currentConnections];
+        secureStorage.set(CONNECTIONS_STORAGE_KEY, currentConnections);
       }
+      
+      setConnections(currentConnections);
     } catch (error) {
       console.error("Error loading connections:", error);
       // If there's an error loading (e.g., corrupted data), start fresh
@@ -236,16 +264,25 @@ export default function ConnectionManager({
     }
 
     setStartingTunnel(tunnelId);
+    
     try {
+      const configWithId = {
+        ...tunnelConfig,
+        id: tunnelId,
+      };
+
       const response = await fetch("/api/tunnel/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tunnelConfig),
+        body: JSON.stringify(configWithId),
       });
 
       const result = await response.json();
       if (result.success) {
         await loadTunnelStatuses();
+        if (tunnelId === "default-rds-tunnel") {
+          alert("Tunnel started! Please enter your SSH passphrase in the terminal if prompted.");
+        }
       } else {
         alert(`Failed to start tunnel: ${result.error}`);
       }
@@ -254,6 +291,39 @@ export default function ConnectionManager({
       alert("Failed to start tunnel");
     } finally {
       setStartingTunnel(null);
+    }
+  };
+
+  const handleRDSTunnelWithPassphrase = async () => {
+    if (!passphrase.trim()) {
+      setPassphraseError("Passphrase is required");
+      return;
+    }
+
+    setStartingTunnel("default-rds-tunnel");
+    setShowPassphraseDialog(false);
+    setPassphraseError("");
+
+    try {
+      const response = await fetch("/api/tunnel/start-rds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passphrase }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        await loadTunnelStatuses();
+        alert(result.message || "RDS tunnel started successfully!");
+      } else {
+        alert(`Failed to start RDS tunnel: ${result.error}`);
+      }
+    } catch (error) {
+      console.error("Error starting RDS tunnel:", error);
+      alert("Failed to start RDS tunnel");
+    } finally {
+      setStartingTunnel(null);
+      setPassphrase("");
     }
   };
 
@@ -714,6 +784,64 @@ export default function ConnectionManager({
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* RDS Tunnel Passphrase Dialog */}
+      {showPassphraseDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded p-6 w-full max-w-md border border-black">
+            <h3 className="text-lg font-semibold mb-4 text-black">
+              Start Database Tunnel
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Enter the passphrase for your SSH key to establish the tunnel connection.
+            </p>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-black mb-2">
+                SSH Key Passphrase
+              </label>
+              <Input
+                type="password"
+                value={passphrase}
+                onChange={(e) => {
+                  setPassphrase(e.target.value);
+                  setPassphraseError("");
+                }}
+                placeholder="Enter passphrase"
+                className="w-full"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleRDSTunnelWithPassphrase();
+                  }
+                }}
+              />
+              {passphraseError && (
+                <p className="text-red-600 text-xs mt-1">{passphraseError}</p>
+              )}
+            </div>
+
+            <div className="flex justify-end space-x-2">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => {
+                  setShowPassphraseDialog(false);
+                  setPassphrase("");
+                  setPassphraseError("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleRDSTunnelWithPassphrase}
+                disabled={!passphrase.trim() || startingTunnel === "default-rds-tunnel"}
+              >
+                {startingTunnel === "default-rds-tunnel" ? "Starting..." : "Start Tunnel"}
+              </Button>
+            </div>
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # DB Manager - Single Click Deploy and Open Script
-# This script deploys the Next.js app on port 3001 and opens it in the default browser
+# This script deploys the Next.js app on port 3006 and opens it in the default browser
 
 # Colors for output
 GREEN='\033[0;32m'

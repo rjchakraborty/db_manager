@@ -181,6 +181,15 @@ export default function Home() {
         return;
       }
 
+      // If connection requires tunnel, skip auto-connect to avoid errors
+      // User needs to manually start tunnel and connect
+      if (defaultConnection.requiresTunnel) {
+        console.log(
+          "Connection requires tunnel - please start tunnel manually first"
+        );
+        return;
+      }
+
       await connectToDatabase(
         defaultConnection,
         () => {
