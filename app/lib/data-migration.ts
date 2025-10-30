@@ -1,6 +1,4 @@
 import { robustStorage } from "./persistent-storage";
-import { DatabaseConnection } from "@/types/database";
-import { QueryHistoryEntry } from "./query-history";
 import CryptoJS from "crypto-js";
 
 // Migration utility to recover data from the old encryption system
