@@ -1,4 +1,5 @@
-import { secureStorage } from "./encryption";
+import { robustStorage } from "./persistent-storage";
+import { DataMigrationManager } from "./data-migration";
 
 export interface QueryHistoryEntry {
   id: string;
@@ -26,29 +27,64 @@ export class QueryHistoryManager {
     tableName?: string
   ): QueryHistoryEntry[] {
     try {
-      const stored = secureStorage.get<QueryHistoryEntry[]>(
+      // Ensure migration has been attempted
+      QueryHistoryManager.ensureMigration();
+
+      const stored = robustStorage.get<QueryHistoryEntry[]>(
         QUERY_HISTORY_STORAGE_KEY
       );
       let history = stored || [];
 
+      // Validate and filter out invalid entries
+      history = history.filter(
+        (entry: QueryHistoryEntry) =>
+          entry &&
+          typeof entry.id === "string" &&
+          typeof entry.sql === "string" &&
+          typeof entry.connectionId === "string"
+      );
+
       if (connectionId) {
         history = history.filter(
-          (entry) => entry.connectionId === connectionId
+          (entry: QueryHistoryEntry) => entry.connectionId === connectionId
         );
       }
 
       if (tableName) {
-        history = history.filter((entry) => entry.tableName === tableName);
+        history = history.filter(
+          (entry: QueryHistoryEntry) => entry.tableName === tableName
+        );
       }
 
       // Sort by last executed date (most recent first)
       return history.sort(
-        (a, b) =>
+        (a: QueryHistoryEntry, b: QueryHistoryEntry) =>
           new Date(b.lastExecutedAt).getTime() -
           new Date(a.lastExecutedAt).getTime()
       );
     } catch (error) {
       console.error("Error loading query history:", error);
+
+      // Try emergency recovery
+      try {
+        const emergency = DataMigrationManager.emergencyDataRecovery();
+        if (
+          emergency.success &&
+          emergency.recovered[QUERY_HISTORY_STORAGE_KEY]
+        ) {
+          const recoveredHistory =
+            emergency.recovered[QUERY_HISTORY_STORAGE_KEY];
+          if (Array.isArray(recoveredHistory)) {
+            console.log("Recovered query history from emergency recovery");
+            // Save using new system
+            robustStorage.set(QUERY_HISTORY_STORAGE_KEY, recoveredHistory);
+            return recoveredHistory;
+          }
+        }
+      } catch {
+        // Emergency recovery failed
+      }
+
       return [];
     }
   }
@@ -64,14 +100,14 @@ export class QueryHistoryManager {
   ): QueryHistoryEntry {
     try {
       const allHistory =
-        secureStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
+        robustStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
 
       // Normalize query for comparison (trim, lowercase, remove extra spaces)
       const normalizedSql = entry.sql.trim().toLowerCase().replace(/\s+/g, " ");
 
       // Check if this exact query already exists for this connection and table
       const existingIndex = allHistory.findIndex(
-        (h) =>
+        (h: QueryHistoryEntry) =>
           h.connectionId === entry.connectionId &&
           h.tableName === entry.tableName &&
           h.sql.trim().toLowerCase().replace(/\s+/g, " ") === normalizedSql
@@ -105,12 +141,12 @@ export class QueryHistoryManager {
 
       // Enforce limits per connection
       const connectionHistory = allHistory.filter(
-        (h) => h.connectionId === entry.connectionId
+        (h: QueryHistoryEntry) => h.connectionId === entry.connectionId
       );
       if (connectionHistory.length > MAX_HISTORY_PER_CONNECTION) {
         // Remove oldest entries for this connection
         const sortedByDate = connectionHistory.sort(
-          (a, b) =>
+          (a: QueryHistoryEntry, b: QueryHistoryEntry) =>
             new Date(a.lastExecutedAt).getTime() -
             new Date(b.lastExecutedAt).getTime()
         );
@@ -118,25 +154,27 @@ export class QueryHistoryManager {
           0,
           connectionHistory.length - MAX_HISTORY_PER_CONNECTION
         );
-        const idsToRemove = new Set(toRemove.map((h) => h.id));
+        const idsToRemove = new Set(
+          toRemove.map((h: QueryHistoryEntry) => h.id)
+        );
         allHistory.splice(
           0,
           allHistory.length,
-          ...allHistory.filter((h) => !idsToRemove.has(h.id))
+          ...allHistory.filter((h: QueryHistoryEntry) => !idsToRemove.has(h.id))
         );
       }
 
       // Enforce limits per table
       if (entry.tableName) {
         const tableHistory = allHistory.filter(
-          (h) =>
+          (h: QueryHistoryEntry) =>
             h.connectionId === entry.connectionId &&
             h.tableName === entry.tableName
         );
         if (tableHistory.length > MAX_HISTORY_PER_TABLE) {
           // Remove oldest entries for this table
           const sortedByDate = tableHistory.sort(
-            (a, b) =>
+            (a: QueryHistoryEntry, b: QueryHistoryEntry) =>
               new Date(a.lastExecutedAt).getTime() -
               new Date(b.lastExecutedAt).getTime()
           );
@@ -144,16 +182,20 @@ export class QueryHistoryManager {
             0,
             tableHistory.length - MAX_HISTORY_PER_TABLE
           );
-          const idsToRemove = new Set(toRemove.map((h) => h.id));
+          const idsToRemove = new Set(
+            toRemove.map((h: QueryHistoryEntry) => h.id)
+          );
           allHistory.splice(
             0,
             allHistory.length,
-            ...allHistory.filter((h) => !idsToRemove.has(h.id))
+            ...allHistory.filter(
+              (h: QueryHistoryEntry) => !idsToRemove.has(h.id)
+            )
           );
         }
       }
 
-      secureStorage.set(QUERY_HISTORY_STORAGE_KEY, allHistory);
+      robustStorage.set(QUERY_HISTORY_STORAGE_KEY, allHistory);
       return savedEntry;
     } catch (error) {
       console.error("Error saving query history:", error);
@@ -167,14 +209,16 @@ export class QueryHistoryManager {
   static deleteQuery(queryId: string): boolean {
     try {
       const history =
-        secureStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
-      const filteredHistory = history.filter((entry) => entry.id !== queryId);
+        robustStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
+      const filteredHistory = history.filter(
+        (entry: QueryHistoryEntry) => entry.id !== queryId
+      );
 
       if (filteredHistory.length === history.length) {
         return false; // Query not found
       }
 
-      secureStorage.set(QUERY_HISTORY_STORAGE_KEY, filteredHistory);
+      robustStorage.set(QUERY_HISTORY_STORAGE_KEY, filteredHistory);
       return true;
     } catch (error) {
       console.error("Error deleting query history:", error);
@@ -188,11 +232,11 @@ export class QueryHistoryManager {
   static clearHistory(connectionId: string): boolean {
     try {
       const history =
-        secureStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
+        robustStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
       const filteredHistory = history.filter(
-        (entry) => entry.connectionId !== connectionId
+        (entry: QueryHistoryEntry) => entry.connectionId !== connectionId
       );
-      secureStorage.set(QUERY_HISTORY_STORAGE_KEY, filteredHistory);
+      robustStorage.set(QUERY_HISTORY_STORAGE_KEY, filteredHistory);
       return true;
     } catch (error) {
       console.error("Error clearing query history:", error);
@@ -389,8 +433,10 @@ export class QueryHistoryManager {
   ): boolean {
     try {
       const history =
-        secureStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
-      const queryIndex = history.findIndex((entry) => entry.id === queryId);
+        robustStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
+      const queryIndex = history.findIndex(
+        (entry: QueryHistoryEntry) => entry.id === queryId
+      );
 
       if (queryIndex === -1) {
         return false;
@@ -402,11 +448,139 @@ export class QueryHistoryManager {
         description: description || history[queryIndex].description,
       };
 
-      secureStorage.set(QUERY_HISTORY_STORAGE_KEY, history);
+      robustStorage.set(QUERY_HISTORY_STORAGE_KEY, history);
       return true;
     } catch (error) {
       console.error("Error updating query title:", error);
       return false;
+    }
+  }
+
+  /**
+   * Ensure data migration has been performed
+   */
+  private static migrationChecked = false;
+
+  static ensureMigration(): void {
+    // Only check migration once per session to avoid performance impact
+    if (QueryHistoryManager.migrationChecked) {
+      return;
+    }
+
+    QueryHistoryManager.migrationChecked = true;
+
+    try {
+      if (!DataMigrationManager.isMigrationCompleted()) {
+        console.log("Checking query history for migration...");
+        const status = DataMigrationManager.getMigrationStatus();
+
+        if (status.needsMigration) {
+          console.warn(
+            "Query history migration needed. Some history may be inaccessible until migration is performed."
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Error during query history migration check:", error);
+    }
+  }
+
+  /**
+   * Check data integrity of query history
+   */
+  static checkDataIntegrity(): {
+    healthy: boolean;
+    issues: string[];
+    totalEntries: number;
+    validEntries: number;
+  } {
+    try {
+      const history =
+        robustStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
+      const issues: string[] = [];
+
+      // Check for invalid entries
+      const validEntries = history.filter((entry: QueryHistoryEntry) => {
+        if (!entry.id || !entry.sql || !entry.connectionId) {
+          return false;
+        }
+        return true;
+      });
+
+      const invalidCount = history.length - validEntries.length;
+      if (invalidCount > 0) {
+        issues.push(`${invalidCount} invalid query history entries found`);
+      }
+
+      // Check for orphaned entries (connections that no longer exist)
+      // This would require importing ConnectionManager, so we'll skip for now
+
+      return {
+        healthy: issues.length === 0,
+        issues,
+        totalEntries: history.length,
+        validEntries: validEntries.length,
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        issues: [
+          `Integrity check failed: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        ],
+        totalEntries: 0,
+        validEntries: 0,
+      };
+    }
+  }
+
+  /**
+   * Clean up invalid query history entries
+   */
+  static cleanupInvalidEntries(): {
+    success: boolean;
+    removedCount: number;
+    message: string;
+  } {
+    try {
+      const history =
+        robustStorage.get<QueryHistoryEntry[]>(QUERY_HISTORY_STORAGE_KEY) || [];
+      const validEntries = history.filter(
+        (entry: QueryHistoryEntry) =>
+          entry &&
+          typeof entry.id === "string" &&
+          typeof entry.sql === "string" &&
+          typeof entry.connectionId === "string" &&
+          entry.id.length > 0 &&
+          entry.sql.length > 0 &&
+          entry.connectionId.length > 0
+      );
+
+      const removedCount = history.length - validEntries.length;
+
+      if (removedCount > 0) {
+        robustStorage.set(QUERY_HISTORY_STORAGE_KEY, validEntries);
+        return {
+          success: true,
+          removedCount,
+          message: `Removed ${removedCount} invalid entries`,
+        };
+      }
+
+      return {
+        success: true,
+        removedCount: 0,
+        message: "No invalid entries found",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        removedCount: 0,
+        message: `Cleanup failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      };
     }
   }
 }

@@ -16,7 +16,8 @@ import { Settings, Menu, X, RefreshCw } from "lucide-react";
 import { ConnectionManager } from "@/lib/connection-manager";
 import { ResizablePanel } from "@/components/ui/resizable-panel";
 import { QueryHistoryManager } from "@/lib/query-history";
-import { secureStorage } from "@/lib/encryption";
+import { robustStorage } from "@/lib/persistent-storage";
+import { DataMigrationManager } from "@/lib/data-migration";
 
 export default function Home() {
   const [selectedConnection, setSelectedConnection] =
@@ -445,7 +446,7 @@ export default function Home() {
       }
 
       if (!storedApiKey) {
-        storedApiKey = secureStorage.get<string>(GEMINI_API_KEY_STORAGE);
+        storedApiKey = robustStorage.get<string>(GEMINI_API_KEY_STORAGE);
       }
 
       if (!storedApiKey) {

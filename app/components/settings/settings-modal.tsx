@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { DatabaseConnection } from "@/types/database";
-import { secureStorage } from "@/lib/encryption";
+import { robustStorage } from "@/lib/persistent-storage";
+import { DataMigrationManager } from "@/lib/data-migration";
 import { generateId } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,7 +45,9 @@ import {
   WifiOff,
   Activity,
   Settings,
+  HardDrive,
 } from "lucide-react";
+import DataManager from "@/components/data-manager/data-manager";
 
 const CONNECTIONS_STORAGE_KEY = "db-connections";
 const DEFAULT_CONNECTION_KEY = "default-connection-id";
@@ -103,6 +106,9 @@ export default function SettingsModal({
   // const [showTunnelConfig, setShowTunnelConfig] = useState(false);
   // const [editingTunnel, setEditingTunnel] = useState<TunnelConfig | null>(null);
   const [tunnelConfig, setTunnelConfig] = useState<TunnelConfig | null>(null);
+  const [activeTab, setActiveTab] = useState<"connections" | "api" | "data">(
+    "connections"
+  );
 
   const checkSchemaCacheStatus = useCallback(() => {
     try {
@@ -155,7 +161,7 @@ export default function SettingsModal({
 
   const loadConnections = () => {
     try {
-      const stored = secureStorage.get<DatabaseConnection[]>(
+      const stored = robustStorage.get<DatabaseConnection[]>(
         CONNECTIONS_STORAGE_KEY
       );
       if (stored) {
@@ -169,7 +175,7 @@ export default function SettingsModal({
 
   const loadDefaultConnection = () => {
     try {
-      const defaultId = secureStorage.get<string>(DEFAULT_CONNECTION_KEY);
+      const defaultId = robustStorage.get<string>(DEFAULT_CONNECTION_KEY);
       setDefaultConnectionId(defaultId);
     } catch (error) {
       console.error("Error loading default connection:", error);
@@ -187,11 +193,11 @@ export default function SettingsModal({
 
       // Fallback to encrypted storage for backward compatibility
       if (!storedKey) {
-        storedKey = secureStorage.get<string>(GEMINI_API_KEY_STORAGE);
+        storedKey = robustStorage.get<string>(GEMINI_API_KEY_STORAGE);
         // If found in encrypted storage, migrate to plain storage
         if (storedKey && typeof window !== "undefined" && window.localStorage) {
           localStorage.setItem(GEMINI_API_KEY_STORAGE, storedKey);
-          secureStorage.remove(GEMINI_API_KEY_STORAGE);
+          robustStorage.remove(GEMINI_API_KEY_STORAGE);
         }
       }
 
@@ -268,7 +274,7 @@ export default function SettingsModal({
     if (typeof window !== "undefined" && window.localStorage) {
       localStorage.removeItem(GEMINI_API_KEY_STORAGE);
     }
-    secureStorage.remove(GEMINI_API_KEY_STORAGE);
+    robustStorage.remove(GEMINI_API_KEY_STORAGE);
     setGeminiApiKey("");
     setShowApiKeyInput(true);
   };
@@ -396,7 +402,7 @@ export default function SettingsModal({
 
   const saveConnections = (updatedConnections: DatabaseConnection[]) => {
     try {
-      secureStorage.set(CONNECTIONS_STORAGE_KEY, updatedConnections);
+      robustStorage.set(CONNECTIONS_STORAGE_KEY, updatedConnections);
       setConnections(updatedConnections);
 
       // If there's only one connection, make it default automatically
@@ -404,7 +410,7 @@ export default function SettingsModal({
         setDefaultConnection(updatedConnections[0].id);
       } else if (updatedConnections.length === 0) {
         // Clear default if no connections
-        secureStorage.remove(DEFAULT_CONNECTION_KEY);
+        robustStorage.remove(DEFAULT_CONNECTION_KEY);
         setDefaultConnectionId(null);
       }
     } catch (error) {
@@ -415,7 +421,7 @@ export default function SettingsModal({
 
   const setDefaultConnection = (connectionId: string) => {
     try {
-      secureStorage.set(DEFAULT_CONNECTION_KEY, connectionId);
+      robustStorage.set(DEFAULT_CONNECTION_KEY, connectionId);
       setDefaultConnectionId(connectionId);
     } catch (error) {
       console.error("Error setting default connection:", error);
@@ -485,7 +491,7 @@ export default function SettingsModal({
 
       // Clear default if this was the default connection
       if (defaultConnectionId === connectionId) {
-        secureStorage.remove(DEFAULT_CONNECTION_KEY);
+        robustStorage.remove(DEFAULT_CONNECTION_KEY);
         setDefaultConnectionId(null);
       }
     }
@@ -631,97 +637,198 @@ export default function SettingsModal({
 
         {/* Modal Content */}
         <div className="p-6">
-          {/* Add Connection Button */}
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-medium text-black">
-              Database Connections
-            </h3>
-            <Button
-              onClick={() => setShowForm(true)}
-              size="sm"
-              variant="outline">
-              <Plus className="h-4 w-4 mr-1" />
-              Add Connection
-            </Button>
+          {/* Tabs */}
+          <div className="flex border-b border-gray-200 mb-6">
+            <button
+              onClick={() => setActiveTab("connections")}
+              className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === "connections"
+                  ? "border-black text-black"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}>
+              <Database className="h-4 w-4 inline mr-2" />
+              Connections
+            </button>
+            <button
+              onClick={() => setActiveTab("api")}
+              className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === "api"
+                  ? "border-black text-black"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}>
+              <Settings className="h-4 w-4 inline mr-2" />
+              API Keys
+            </button>
+            <button
+              onClick={() => setActiveTab("data")}
+              className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === "data"
+                  ? "border-black text-black"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}>
+              <HardDrive className="h-4 w-4 inline mr-2" />
+              Data Management
+            </button>
           </div>
 
-          {/* Connection List */}
-          <div className="space-y-3 mb-6">
-            {connections.map((connection) => (
-              <div
-                key={connection.id}
-                className={`p-4 border rounded-lg ${
-                  currentConnectionId === connection.id
-                    ? "border-black bg-gray-50"
-                    : "border-gray-200"
-                }`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
+          {/* Data Management Tab */}
+          {activeTab === "data" && (
+            <div>
+              <DataManager />
+            </div>
+          )}
+
+          {/* API Keys Tab */}
+          {activeTab === "api" && (
+            <div className="space-y-6">
+              {/* Gemini API Key Section */}
+              <div className="border rounded-lg p-4">
+                <h3 className="font-medium mb-3 flex items-center">
+                  <Settings className="h-4 w-4 mr-2" />
+                  Gemini API Key
+                </h3>
+
+                {geminiApiKey ? (
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center">
-                      <h4 className="font-medium text-black">
-                        {connection.name}
-                      </h4>
-                      {defaultConnectionId === connection.id && (
-                        <Star className="h-4 w-4 ml-2 text-black fill-current" />
-                      )}
-                      {schemaCacheStatus.get(connection.id) && (
-                        <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-900 text-xs rounded-full">
-                          Cached
-                        </span>
-                      )}
+                      <div className="h-2 w-2 bg-black rounded-full mr-2"></div>
+                      <span className="text-sm text-gray-900">
+                        API Key configured
+                      </span>
                     </div>
-                    <p className="text-sm text-gray-600">
-                      {connection.username}@{connection.host}:{connection.port}/
-                      {connection.database}
+                    <button
+                      onClick={clearGeminiApiKey}
+                      className="text-sm text-gray-600 hover:text-black transition-colors">
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-2">
+                      <Input
+                        type="password"
+                        value={geminiApiKey}
+                        onChange={(e) => handleApiKeyChange(e.target.value)}
+                        onPaste={(e) => {
+                          e.preventDefault();
+                          const pastedValue = e.clipboardData.getData("text");
+                          console.log(
+                            "Pasted API key length:",
+                            pastedValue.length
+                          );
+                          handleApiKeyChange(pastedValue);
+                        }}
+                        placeholder="Enter your Gemini API key"
+                        className="flex-1 input-base"
+                      />
+                      <button
+                        onClick={() => saveGeminiApiKey()}
+                        className="px-3 py-2 bg-black text-white rounded hover:bg-gray-800 transition-colors text-sm">
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Connections Tab */}
+          {activeTab === "connections" && (
+            <div>
+              {/* Add Connection Button */}
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-lg font-medium text-black">
+                  Database Connections
+                </h3>
+                <Button
+                  onClick={() => setShowForm(true)}
+                  size="sm"
+                  variant="outline">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Connection
+                </Button>
+              </div>
+
+              {/* Connection List */}
+              <div className="space-y-3 mb-6">
+                {connections.map((connection) => (
+                  <div
+                    key={connection.id}
+                    className={`p-4 border rounded-lg ${
+                      currentConnectionId === connection.id
+                        ? "border-black bg-gray-50"
+                        : "border-gray-200"
+                    }`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center">
+                          <h4 className="font-medium text-black">
+                            {connection.name}
+                          </h4>
+                          {defaultConnectionId === connection.id && (
+                            <Star className="h-4 w-4 ml-2 text-black fill-current" />
+                          )}
+                          {schemaCacheStatus.get(connection.id) && (
+                            <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-900 text-xs rounded-full">
+                              Cached
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-600">
+                          {connection.username}@{connection.host}:
+                          {connection.port}/{connection.database}
+                        </p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {connections.length > 1 && (
+                          <button
+                            onClick={() => setDefaultConnection(connection.id)}
+                            className="p-1 text-gray-400 hover:text-black transition-colors"
+                            title={
+                              defaultConnectionId === connection.id
+                                ? "Default connection"
+                                : "Set as default"
+                            }>
+                            {defaultConnectionId === connection.id ? (
+                              <Star className="h-4 w-4 fill-current" />
+                            ) : (
+                              <StarOff className="h-4 w-4" />
+                            )}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleConnect(connection)}
+                          className="px-3 py-1 text-sm bg-black text-white rounded hover:bg-gray-800 transition-colors">
+                          Connect
+                        </button>
+                        <button
+                          onClick={() => handleEdit(connection)}
+                          className="p-1 text-gray-400 hover:text-black transition-colors">
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(connection.id)}
+                          className="p-1 text-gray-400 hover:text-black transition-colors">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {connections.length === 0 && (
+                  <div className="text-center py-8 text-gray-500">
+                    <Database className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                    <p>No database connections configured</p>
+                    <p className="text-sm">
+                      Add your first connection to get started
                     </p>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    {connections.length > 1 && (
-                      <button
-                        onClick={() => setDefaultConnection(connection.id)}
-                        className="p-1 text-gray-400 hover:text-black transition-colors"
-                        title={
-                          defaultConnectionId === connection.id
-                            ? "Default connection"
-                            : "Set as default"
-                        }>
-                        {defaultConnectionId === connection.id ? (
-                          <Star className="h-4 w-4 fill-current" />
-                        ) : (
-                          <StarOff className="h-4 w-4" />
-                        )}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleConnect(connection)}
-                      className="px-3 py-1 text-sm bg-black text-white rounded hover:bg-gray-800 transition-colors">
-                      Connect
-                    </button>
-                    <button
-                      onClick={() => handleEdit(connection)}
-                      className="p-1 text-gray-400 hover:text-black transition-colors">
-                      <Edit2 className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(connection.id)}
-                      className="p-1 text-gray-400 hover:text-black transition-colors">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
+                )}
               </div>
-            ))}
-
-            {connections.length === 0 && (
-              <div className="text-center py-8 text-gray-500">
-                <Database className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                <p>No database connections configured</p>
-                <p className="text-sm">
-                  Add your first connection to get started
-                </p>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Connection Form */}
           {showForm && (

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { DatabaseTable, QueryResult } from "@/types/database";
 import { Editor } from "@monaco-editor/react";
-import { secureStorage } from "@/lib/encryption";
+import { robustStorage } from "@/lib/persistent-storage";
 import { FavoritesManager, FavoriteQuery } from "@/lib/favorites";
 import { QueryHistoryManager, QueryHistoryEntry } from "@/lib/query-history";
 import { Star, StarOff, RefreshCw, Save, Trash2, X } from "lucide-react";
@@ -149,7 +149,7 @@ export default function EnhancedAIAssistant({
 
       // Fallback to encrypted storage
       if (!storedApiKey) {
-        storedApiKey = secureStorage.get<string>(GEMINI_API_KEY_STORAGE);
+        storedApiKey = robustStorage.get<string>(GEMINI_API_KEY_STORAGE);
       }
 
       if (!storedApiKey) {
