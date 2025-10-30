@@ -110,14 +110,14 @@ export default function ConnectionManager({
       const stored = secureStorage.get<DatabaseConnection[]>(
         CONNECTIONS_STORAGE_KEY
       );
-      
+
       let currentConnections = stored || [];
-      
+
       // Auto-add default RDS connection if it doesn't exist
       const hasRDSConnection = currentConnections.some(
-        conn => conn.tunnelId === "default-rds-tunnel"
+        (conn) => conn.tunnelId === "default-rds-tunnel"
       );
-      
+
       if (!hasRDSConnection) {
         const rdsConnection: DatabaseConnection = {
           id: generateId(),
@@ -130,13 +130,13 @@ export default function ConnectionManager({
           ssl: false,
           requiresTunnel: true,
           tunnelId: "default-rds-tunnel",
-          createdAt: new Date()
+          createdAt: new Date(),
         };
-        
+
         currentConnections = [rdsConnection, ...currentConnections];
         secureStorage.set(CONNECTIONS_STORAGE_KEY, currentConnections);
       }
-      
+
       setConnections(currentConnections);
     } catch (error) {
       console.error("Error loading connections:", error);
@@ -264,7 +264,7 @@ export default function ConnectionManager({
     }
 
     setStartingTunnel(tunnelId);
-    
+
     try {
       const configWithId = {
         ...tunnelConfig,
@@ -281,7 +281,9 @@ export default function ConnectionManager({
       if (result.success) {
         await loadTunnelStatuses();
         if (tunnelId === "default-rds-tunnel") {
-          alert("Tunnel started! Please enter your SSH passphrase in the terminal if prompted.");
+          alert(
+            "Tunnel started! Please enter your SSH passphrase in the terminal if prompted."
+          );
         }
       } else {
         alert(`Failed to start tunnel: ${result.error}`);
@@ -796,9 +798,10 @@ export default function ConnectionManager({
               Start Database Tunnel
             </h3>
             <p className="text-sm text-gray-600 mb-4">
-              Enter the passphrase for your SSH key to establish the tunnel connection.
+              Enter the passphrase for your SSH key to establish the tunnel
+              connection.
             </p>
-            
+
             <div className="mb-4">
               <label className="block text-sm font-medium text-black mb-2">
                 SSH Key Passphrase
@@ -824,22 +827,24 @@ export default function ConnectionManager({
             </div>
 
             <div className="flex justify-end space-x-2">
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
                   setShowPassphraseDialog(false);
                   setPassphrase("");
                   setPassphraseError("");
-                }}
-              >
+                }}>
                 Cancel
               </Button>
-              <Button 
+              <Button
                 onClick={handleRDSTunnelWithPassphrase}
-                disabled={!passphrase.trim() || startingTunnel === "default-rds-tunnel"}
-              >
-                {startingTunnel === "default-rds-tunnel" ? "Starting..." : "Start Tunnel"}
+                disabled={
+                  !passphrase.trim() || startingTunnel === "default-rds-tunnel"
+                }>
+                {startingTunnel === "default-rds-tunnel"
+                  ? "Starting..."
+                  : "Start Tunnel"}
               </Button>
             </div>
           </div>
